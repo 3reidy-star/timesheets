@@ -1,0 +1,134 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      Role     @default(ENGINEER)
+
+  entries   TimesheetEntry[]
+  weeks     TimesheetWeek[]
+
+  weekAuditsPerformed WeekAudit[] @relation("WeekAuditPerformedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+model TimesheetWeek {
+  id        String     @id @default(cuid())
+  user      User       @relation(fields: [userId], references: [id])
+  userId    String
+  weekStart DateTime
+  status    WeekStatus @default(DRAFT)
+  entries   TimesheetEntry[]
+
+  audits    WeekAudit[]
+
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @default(now()) @updatedAt
+
+  @@unique([userId, weekStart])
+  @@index([userId])
+  @@index([weekStart])
+  @@index([status])
+}
+
+model TimesheetEntry {
+  id                String   @id @default(cuid())
+
+  weekId            String
+  userId            String
+
+  date              DateTime
+
+  type              EntryType @default(WORK)
+
+  // FREE TEXT JOB (replaces Project)
+  job               String    @default("")
+
+  description       String?
+
+  hours             Float
+
+  startTime         String   @default("08:00")
+  finishTime        String   @default("17:00")
+
+  regularHours      Float    @default(0)
+  otMonFriHours     Float    @default(0)
+  otSatHours        Float    @default(0)
+  otSunBhHours      Float    @default(0)
+
+  leftEarlyByChoice Boolean  @default(false)
+
+  overnight         Boolean  @default(false)
+  agreedRate        Float?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  week    TimesheetWeek @relation(fields: [weekId], references: [id])
+  user    User          @relation(fields: [userId], references: [id])
+
+  @@index([weekId])
+  @@index([userId])
+  @@index([date])
+  @@index([type])
+  @@index([job])
+}
+
+model WeekAudit {
+  id            String      @id @default(cuid())
+
+  weekId        String
+  action        WeekAction
+  comment       String?
+
+  performedById String
+  performedBy   User        @relation("WeekAuditPerformedBy", fields: [performedById], references: [id])
+
+  createdAt     DateTime    @default(now())
+
+  week          TimesheetWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+
+  @@index([weekId])
+  @@index([performedById])
+  @@index([createdAt])
+  @@index([action])
+}
+
+enum Role {
+  ENGINEER
+  ACCOUNTS
+  ADMIN
+}
+
+enum WeekStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum EntryType {
+  WORK
+  HOLIDAY_FULL
+  HOLIDAY_HALF
+  SICK
+  TRAINING
+}
+
+enum WeekAction {
+  CREATED
+  SUBMITTED
+  APPROVED
+  REJECTED
+  EDITED
+}
