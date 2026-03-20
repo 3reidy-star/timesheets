@@ -10,7 +10,7 @@ export default async function ApprovalsLayout({
 }) {
   const session = await auth();
 
-  if (!session?.user?.id) {
+  if (!(session?.user as any)?.id) {
   redirect("/login?callbackUrl=/approvals");
 }
 

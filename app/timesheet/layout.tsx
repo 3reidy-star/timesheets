@@ -11,9 +11,9 @@ export default async function TimesheetLayout({
 }) {
   const session = await auth();
 
-  if (!session?.user?.id) {
-    redirect("/login?callbackUrl=/timesheet");
-  }
+  if (!(session?.user as any)?.id) {
+  redirect("/login?callbackUrl=/timesheet");
+}
 
   return (
     <>
