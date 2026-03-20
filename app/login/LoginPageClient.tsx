@@ -29,9 +29,10 @@ export default function LoginPageClient() {
 
     if (res?.error) {
       setErr("Invalid email or password");
-    } else {
-      window.location.href = callbackUrl;
+      return;
     }
+
+    window.location.href = callbackUrl;
   }
 
   return (
@@ -60,14 +61,12 @@ export default function LoginPageClient() {
           required
         />
 
-        {err && (
-          <div className="text-sm text-red-600">{err}</div>
-        )}
+        {err ? <div className="text-sm text-red-600">{err}</div> : null}
 
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-slate-900 px-4 py-3 text-white font-semibold"
+          className="w-full rounded-lg bg-slate-900 px-4 py-3 font-semibold text-white"
         >
           {loading ? "Signing in..." : "Sign in"}
         </button>
