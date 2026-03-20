@@ -1,5 +1,5 @@
 import NextAuth from "next-auth";
-import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
+import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/app/lib/prisma";
 
@@ -10,10 +10,44 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: { signIn: "/login" },
 
   providers: [
-    MicrosoftEntraID({
-      clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID!,
-      clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET!,
-      issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER!,
+    Credentials({
+      name: "Credentials",
+      credentials: {
+        email: {},
+        password: {},
+      },
+      async authorize(credentials) {
+        const email = credentials?.email as string;
+        const password = credentials?.password as string;
+
+        if (
+          email === process.env.AUTH_TEST_EMAIL &&
+          password === process.env.AUTH_TEST_PASSWORD
+        ) {
+          let user = await prisma.user.findUnique({
+            where: { email },
+          });
+
+          if (!user) {
+            user = await prisma.user.create({
+              data: {
+                email,
+                name: "Test User",
+                role: "ENGINEER",
+              },
+            });
+          }
+
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+          } as any;
+        }
+
+        return null;
+      },
     }),
   ],
 
@@ -29,7 +63,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
   events: {
     async createUser({ user }) {
-      // Ensure new SSO users get a default role
       await prisma.user.update({
         where: { id: user.id },
         data: { role: "ENGINEER" },
