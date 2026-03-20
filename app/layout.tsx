@@ -1,16 +1,24 @@
 import "./globals.css";
 import TopNav from "./components/TopNav";
+import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 
 export const metadata = {
   title: "Timesheets",
   description: "Timesheet admin",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const session = await auth();
+
+  if (!session?.user) {
+    redirect("/login?callbackUrl=/timesheet");
+  }
+
   return (
     <html lang="en">
       <body className="min-h-screen bg-slate-50 text-slate-900">
