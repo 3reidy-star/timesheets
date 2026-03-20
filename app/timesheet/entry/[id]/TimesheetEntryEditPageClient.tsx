@@ -1,5 +1,5 @@
 "use client";
 
-export default function TimesheetEntryEditPageClient() {
-  return <div>Edit entry page</div>;
+export default function TimesheetEntrySavedPageClient() {
+  return <div>Entry saved page</div>;
 }
