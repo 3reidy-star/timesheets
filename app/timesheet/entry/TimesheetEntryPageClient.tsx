@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 type Week = {
   id: string;
@@ -10,31 +10,31 @@ type Week = {
   status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
 };
 
-type WeekApiResponse = {
-  week: Week;
-  user: { id: string; name: string | null; email: string };
-};
-
 type EntryType = "WORK" | "HOLIDAY_FULL" | "HOLIDAY_HALF" | "SICK" | "TRAINING";
 type HalfDay = "AM" | "PM";
 
-type EntryDraft = {
-  weekId: string;
-  weekStartIso: string;
-  type: EntryType;
-  halfDay?: HalfDay;
-  date: string;
-  startTime: string;
-  finishTime: string;
-  overnight: boolean;
-  leftEarlyByChoice: boolean;
-  agreedRate: number | null;
-  description: string | null;
-  job: string | null;
+type EntryApiResponse = {
+  entry: {
+    id: string;
+    date: string;
+    type: EntryType;
+    hours: number;
+    startTime: string;
+    finishTime: string;
+    overnight: boolean;
+    leftEarlyByChoice?: boolean;
+    agreedRate?: number | null;
+    description: string | null;
+    job?: string | null;
+    week: {
+      id: string;
+      weekStart: string;
+      status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+    };
+  };
 };
 
 export const dynamic = "force-dynamic";
-const DRAFT_KEY = "ts_entry_draft_v1";
 
 const BREAK_THRESHOLD_HOURS = 8;
 const BREAK_HOURS = 0.5;
@@ -44,26 +44,6 @@ async function readJsonOrText(r: Response) {
   if (ct.includes("application/json")) return r.json();
   const t = await r.text();
   return { error: t.slice(0, 1200) };
-}
-
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
-
-function startOfWeekMonday(d: Date) {
-  const date = new Date(d);
-  const day = date.getDay();
-  const diff = (day === 0 ? -6 : 1) - day;
-  date.setDate(date.getDate() + diff);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function parseWeekStartFromQuery(qsValue: string | null) {
-  if (!qsValue) return null;
-  const d = new Date(qsValue);
-  if (Number.isNaN(d.getTime())) return null;
-  return isoDate(startOfWeekMonday(d));
 }
 
 function parseHHMM(value: string) {
@@ -149,6 +129,11 @@ function halfDayTimesForDate(dateIso: string, half: HalfDay) {
   return half === "PM"
     ? { start: "13:00", finish: "17:00", label: "PM (13:00–17:00)" }
     : { start: "08:00", finish: "12:00", label: "AM (08:00–12:00)" };
+}
+
+function inferHalfDayFromTimes(dateIso: string, startTime: string, finishTime: string): HalfDay {
+  const am = halfDayTimesForDate(dateIso, "AM");
+  return startTime === am.start && finishTime === am.finish ? "AM" : "PM";
 }
 
 function isLikelyEarlyFinish(dateIso: string, finishTime: string) {
@@ -264,65 +249,78 @@ function CalcTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function EntryPage() {
+export default function TimesheetEntryEditPageClient() {
   const router = useRouter();
+  const params = useParams();
   const sp = useSearchParams();
 
-  const weekStartIso = useMemo(() => {
-    return parseWeekStartFromQuery(sp.get("weekStart")) ?? isoDate(startOfWeekMonday(new Date()));
-  }, [sp]);
+  const entryId = String(params?.id ?? "");
+  const qsWeekStart = sp.get("weekStart");
 
   const [loading, setLoading] = useState(true);
-  const [week, setWeek] = useState<Week | null>(null);
+  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const [entryWeek, setEntryWeek] = useState<Week | null>(null);
 
   const [type, setType] = useState<EntryType>("WORK");
   const [halfDay, setHalfDay] = useState<HalfDay>("AM");
-
-  const [dateIso, setDateIso] = useState(() => weekStartIso);
-
+  const [dateIso, setDateIso] = useState("");
   const [job, setJob] = useState("");
-
   const [startTime, setStartTime] = useState("08:00");
   const [finishTime, setFinishTime] = useState("17:00");
-
   const [overnight, setOvernight] = useState(false);
   const [leftEarlyByChoice, setLeftEarlyByChoice] = useState(false);
   const [dismissedEarlyFinishCallout, setDismissedEarlyFinishCallout] = useState(false);
-
   const [description, setDescription] = useState("");
   const [agreedRate, setAgreedRate] = useState<string>("");
 
-  async function load() {
+  const isWork = type === "WORK";
+  const isHalfHoliday = type === "HOLIDAY_HALF";
+  const isDraft = entryWeek?.status === "DRAFT";
+
+  async function loadEntry() {
+    if (!entryId) return;
+
     setLoading(true);
     setErr(null);
+
     try {
-      const r = await fetch(`/api/week?weekStart=${encodeURIComponent(weekStartIso)}`, {
+      const r = await fetch(`/api/entry/${encodeURIComponent(entryId)}`, {
         cache: "no-store",
       });
-      const data = (await readJsonOrText(r)) as WeekApiResponse | { error: string };
-      if (!r.ok) throw new Error((data as any)?.error ?? "Failed to load week");
+      const data = (await readJsonOrText(r)) as EntryApiResponse | { error: string };
 
-      const w = (data as WeekApiResponse).week;
-      setWeek(w);
+      if (!r.ok) throw new Error((data as any)?.error ?? "Failed to load entry");
 
-      if (!dateIso) setDateIso(weekStartIso);
+      const entry = (data as EntryApiResponse).entry;
+
+      setEntryWeek(entry.week);
+      setType(entry.type);
+      setDateIso(entry.date.slice(0, 10));
+      setJob(entry.job ?? "");
+      setStartTime(entry.startTime);
+      setFinishTime(entry.finishTime);
+      setOvernight(!!entry.overnight);
+      setLeftEarlyByChoice(!!entry.leftEarlyByChoice);
+      setDescription(entry.description ?? "");
+      setAgreedRate(entry.agreedRate == null ? "" : String(entry.agreedRate));
+
+      if (entry.type === "HOLIDAY_HALF") {
+        setHalfDay(inferHalfDayFromTimes(entry.date.slice(0, 10), entry.startTime, entry.finishTime));
+      }
     } catch (e: any) {
-      setWeek(null);
-      setErr(e?.message ?? "Failed to load week");
+      setErr(e?.message ?? "Failed to load entry");
+      setEntryWeek(null);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
+    loadEntry();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekStartIso]);
-
-  const isDraft = week?.status === "DRAFT";
-  const isWork = type === "WORK";
-  const isHalfHoliday = type === "HOLIDAY_HALF";
+  }, [entryId]);
 
   useEffect(() => {
     if (!isHalfHoliday) return;
@@ -334,6 +332,7 @@ export default function EntryPage() {
   useEffect(() => {
     if (isWork) return;
     if (isHalfHoliday) return;
+    if (!dateIso) return;
     const times = standardTimesForDate(dateIso);
     setStartTime(times.start);
     setFinishTime(times.finish);
@@ -350,6 +349,10 @@ export default function EntryPage() {
   }, [dateIso, startTime, finishTime, type]);
 
   const preview = useMemo(() => {
+    if (!dateIso) {
+      return { ok: true as const, error: null as any, total: 0, reg: 0, otMonFri: 0, otSat: 0, otSunBh: 0 };
+    }
+
     if (!isWork) {
       const base = standardHoursForDate(dateIso);
 
@@ -392,40 +395,61 @@ export default function EntryPage() {
     !!dateIso &&
     isLikelyEarlyFinish(dateIso, finishTime);
 
-  const canContinue = !!week && isDraft && !!dateIso && preview.ok && (!isWork || !!job.trim());
+  const canSave = !!entryWeek && isDraft && !!dateIso && preview.ok && (!isWork || !!job.trim()) && !saving;
 
-  function saveToDraftAndGoConfirm() {
-    if (!week) return;
+  async function saveChanges() {
+    if (!entryWeek) return;
+
     if (!isDraft) {
       setErr("Week is locked and cannot be modified.");
       return;
     }
-    if (!canContinue) {
+
+    if (!canSave) {
       setErr("Please complete the required fields.");
       return;
     }
 
-    const agreed =
-      agreedRate.trim() === "" ? null : Number.isFinite(Number(agreedRate)) ? Number(agreedRate) : null;
+    setSaving(true);
+    setErr(null);
 
-    const draft: EntryDraft = {
-      weekId: week.id,
-      weekStartIso,
-      type,
-      halfDay: isHalfHoliday ? halfDay : undefined,
-      date: dateIso,
-      startTime,
-      finishTime,
-      overnight: !!overnight,
-      leftEarlyByChoice: isWork ? !!leftEarlyByChoice : false,
-      agreedRate: agreed,
-      description: description.trim() ? description.trim() : null,
-      job: job.trim() ? job.trim() : null,
-    };
+    try {
+      const agreed =
+        agreedRate.trim() === "" ? null : Number.isFinite(Number(agreedRate)) ? Number(agreedRate) : null;
 
-    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-    router.push(`/timesheet/entry/confirm?weekStart=${encodeURIComponent(weekStartIso)}`);
+      const payload = {
+        id: entryId,
+        date: dateIso,
+        type,
+        startTime,
+        finishTime,
+        overnight: !!overnight,
+        leftEarlyByChoice: isWork ? !!leftEarlyByChoice : false,
+        agreedRate: agreed,
+        description: description.trim() ? description.trim() : null,
+        job: isWork ? (job.trim() ? job.trim() : null) : null,
+        halfDay: isHalfHoliday ? halfDay : undefined,
+      };
+
+      const r = await fetch(`/api/entry/${encodeURIComponent(entryId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await readJsonOrText(r);
+      if (!r.ok) throw new Error((data as any)?.error ?? "Failed to update entry");
+
+      router.push(`/timesheet?weekStart=${encodeURIComponent(entryWeek.weekStart)}`);
+      router.refresh();
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to update entry");
+    } finally {
+      setSaving(false);
+    }
   }
+
+  const backWeekStart = entryWeek?.weekStart ?? qsWeekStart ?? "";
 
   if (loading) {
     return (
@@ -435,17 +459,17 @@ export default function EntryPage() {
     );
   }
 
-  if (!week) {
+  if (!entryWeek) {
     return (
       <InputCard>
-        <div className="text-slate-600">No week loaded.</div>
+        <div className="text-slate-600">Entry not found.</div>
         {err ? (
           <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
             {err}
           </div>
         ) : null}
         <Link
-          href={`/timesheet?weekStart=${encodeURIComponent(weekStartIso)}`}
+          href={backWeekStart ? `/timesheet?weekStart=${encodeURIComponent(backWeekStart)}` : "/timesheet"}
           className="mt-4 inline-flex rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400"
         >
           Back to timesheet
@@ -459,10 +483,10 @@ export default function EntryPage() {
       <InputCard>
         <h1 className="text-xl font-semibold text-slate-900">Week locked</h1>
         <p className="mt-2 text-sm text-slate-600">
-          This week is <span className="font-semibold">{week.status}</span> and can’t be edited.
+          This week is <span className="font-semibold">{entryWeek.status}</span> and can’t be edited.
         </p>
         <Link
-          href={`/timesheet?weekStart=${encodeURIComponent(weekStartIso)}`}
+          href={`/timesheet?weekStart=${encodeURIComponent(entryWeek.weekStart)}`}
           className="mt-4 inline-flex rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-cyan-400"
         >
           Back to timesheet
@@ -483,7 +507,7 @@ export default function EntryPage() {
       ) : null}
 
       <InputCard>
-        <h1 className="text-2xl font-semibold text-slate-900">Add entry</h1>
+        <h1 className="text-2xl font-semibold text-slate-900">Edit entry</h1>
         <p className="mt-2 text-sm text-slate-600">
           For Work: do not include lunch. If total working time in a day is{" "}
           <span className="font-semibold text-slate-900">
@@ -506,11 +530,6 @@ export default function EntryPage() {
                 </option>
               ))}
             </select>
-            {!isWork ? (
-              <div className="mt-2 text-sm text-slate-600">
-                Non-work entries don’t require Job/Site. Holiday (Half) can be allocated to AM or PM.
-              </div>
-            ) : null}
           </div>
 
           <div>
@@ -615,9 +634,7 @@ export default function EntryPage() {
 
           {showEarlyFinishCallout ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-              <div className="text-sm font-semibold text-amber-900">
-                This looks like an early finish
-              </div>
+              <div className="text-sm font-semibold text-amber-900">This looks like an early finish</div>
               <div className="mt-1 text-sm text-amber-800">
                 If the employee asked to go home early, apply the early finish rule so they are only
                 paid for hours worked plus any actual overtime.
@@ -736,16 +753,16 @@ export default function EntryPage() {
 
           <button
             type="button"
-            onClick={saveToDraftAndGoConfirm}
-            disabled={!canContinue}
+            onClick={saveChanges}
+            disabled={!canSave}
             className="mt-2 w-full rounded-2xl bg-cyan-500 px-5 py-3 text-base font-semibold text-slate-900 shadow-sm hover:bg-cyan-400 disabled:opacity-50"
           >
-            Continue →
+            {saving ? "Saving…" : "Save changes"}
           </button>
 
           <div className="flex items-center justify-between">
             <Link
-              href={`/timesheet?weekStart=${encodeURIComponent(weekStartIso)}`}
+              href={`/timesheet?weekStart=${encodeURIComponent(entryWeek.weekStart)}`}
               className="text-sm font-semibold text-slate-600 hover:text-slate-800"
             >
               ← Back to weekly timesheet
