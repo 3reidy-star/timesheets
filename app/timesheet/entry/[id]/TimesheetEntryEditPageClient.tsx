@@ -280,7 +280,10 @@ export default function TimesheetEntryEditPageClient() {
   const isDraft = entryWeek?.status === "DRAFT";
 
   async function loadEntry() {
-    if (!entryId) return;
+  if (!entryId) {
+    setLoading(false);
+    return;
+  }
 
     setLoading(true);
     setErr(null);
