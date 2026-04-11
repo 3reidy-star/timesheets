@@ -73,12 +73,12 @@ function fmt2(n: number) {
 }
 
 function dayNameLong(dateIso: string) {
-  const d = new Date(dateIso);
+  const d = new Date(`${dateIso}T00:00:00`);
   return d.toLocaleDateString(undefined, { weekday: "long" });
 }
 
 function prettyDate(dateIso: string) {
-  const d = new Date(dateIso);
+  const d = new Date(`${dateIso}T00:00:00`);
   return d.toLocaleDateString(undefined, {
     day: "2-digit",
     month: "short",
@@ -102,7 +102,7 @@ function entryTypeLabel(t: EntryType) {
 }
 
 function standardHoursForDate(dateIso: string) {
-  const d = new Date(dateIso);
+  const d = new Date(`${dateIso}T00:00:00`);
   const dow = d.getDay();
   if (dow >= 1 && dow <= 4) return 8;
   if (dow === 5) return 5;
@@ -110,14 +110,14 @@ function standardHoursForDate(dateIso: string) {
 }
 
 function standardTimesForDate(dateIso: string) {
-  const d = new Date(dateIso);
+  const d = new Date(`${dateIso}T00:00:00`);
   const dow = d.getDay();
   if (dow === 5) return { start: "08:30", finish: "14:00" };
   return { start: "08:30", finish: "17:00" };
 }
 
 function halfDayTimesForDate(dateIso: string, half: HalfDay) {
-  const d = new Date(dateIso);
+  const d = new Date(`${dateIso}T00:00:00`);
   const dow = d.getDay();
 
   if (dow === 5) {
@@ -151,7 +151,7 @@ function calcWorkPreview(
   finishTime: string,
   leftEarlyByChoice: boolean
 ) {
-  const date = new Date(dateIso);
+  const date = new Date(`${dateIso}T00:00:00`);
   const startMin = parseHHMM(startTime);
   const finishMinRaw = parseHHMM(finishTime);
 
@@ -280,10 +280,10 @@ export default function TimesheetEntryEditPageClient() {
   const isDraft = entryWeek?.status === "DRAFT";
 
   async function loadEntry() {
-  if (!entryId) {
-    setLoading(false);
-    return;
-  }
+    if (!entryId) {
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     setErr(null);

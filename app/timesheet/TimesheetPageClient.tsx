@@ -134,28 +134,28 @@ function addDays(d: Date, days: number) {
 }
 
 function addWeeksIso(weekStartIso: string, weeks: number) {
-  const d = new Date(weekStartIso);
+  const d = new Date(`${weekStartIso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return weekStartIso;
   d.setDate(d.getDate() + weeks * 7);
   return isoDate(startOfWeekMonday(d));
 }
 
 function shortDate(dateIso: string) {
-  const d = new Date(dateIso);
+  const d = new Date(`${dateIso}T00:00:00`);
   return d.toLocaleDateString(undefined, { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function dayShort(dateIso: string) {
-  return new Date(dateIso).toLocaleDateString(undefined, { weekday: "short" });
+  return new Date(`${dateIso}T00:00:00`).toLocaleDateString(undefined, { weekday: "short" });
 }
 
 function dayLong(dateIso: string) {
-  return new Date(dateIso).toLocaleDateString(undefined, { weekday: "long" });
+  return new Date(`${dateIso}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" });
 }
 
 function parseWeekStartFromQuery(qsValue: string | null) {
   if (!qsValue) return null;
-  const d = new Date(qsValue);
+  const d = new Date(`${qsValue}T00:00:00`);
   if (Number.isNaN(d.getTime())) return null;
   return isoDate(startOfWeekMonday(d));
 }
@@ -293,7 +293,8 @@ export default function TimesheetPage() {
     for (const [k, list] of map) {
       list.sort(
         (a, b) =>
-          new Date(a.date).getTime() - new Date(b.date).getTime() ||
+          new Date(`${dateKey(a.date)}T00:00:00`).getTime() -
+new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
           (a.startTime || "").localeCompare(b.startTime || "")
       );
       map.set(k, list);
