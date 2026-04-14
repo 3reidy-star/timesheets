@@ -21,6 +21,7 @@ type Entry = {
 
   overnight: boolean;
   leftEarlyByChoice?: boolean;
+  jobAndKnock?: boolean;
   agreedRate: number | null;
   description?: string | null;
 };
@@ -109,13 +110,21 @@ function fmtGBP(n: number | null | undefined) {
   return Number.isFinite(v) ? `£${v.toFixed(2)}` : "£0.00";
 }
 
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
+function formatLocalDate(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function parseLocalDate(dateIso: string) {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0, 0);
 }
 
 function dateKey(value: string | Date) {
   if (typeof value === "string") return value.slice(0, 10);
-  return value.toISOString().slice(0, 10);
+  return formatLocalDate(value);
 }
 
 function startOfWeekMonday(d: Date) {
@@ -123,7 +132,7 @@ function startOfWeekMonday(d: Date) {
   const day = date.getDay();
   const diff = (day === 0 ? -6 : 1) - day;
   date.setDate(date.getDate() + diff);
-  date.setHours(0, 0, 0, 0);
+  date.setHours(12, 0, 0, 0);
   return date;
 }
 
@@ -134,30 +143,30 @@ function addDays(d: Date, days: number) {
 }
 
 function addWeeksIso(weekStartIso: string, weeks: number) {
-  const d = new Date(`${weekStartIso}T00:00:00`);
+  const d = parseLocalDate(weekStartIso);
   if (Number.isNaN(d.getTime())) return weekStartIso;
   d.setDate(d.getDate() + weeks * 7);
-  return isoDate(startOfWeekMonday(d));
+  return formatLocalDate(startOfWeekMonday(d));
 }
 
 function shortDate(dateIso: string) {
-  const d = new Date(`${dateIso}T00:00:00`);
+  const d = parseLocalDate(dateIso);
   return d.toLocaleDateString(undefined, { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function dayShort(dateIso: string) {
-  return new Date(`${dateIso}T00:00:00`).toLocaleDateString(undefined, { weekday: "short" });
+  return parseLocalDate(dateIso).toLocaleDateString(undefined, { weekday: "short" });
 }
 
 function dayLong(dateIso: string) {
-  return new Date(`${dateIso}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" });
+  return parseLocalDate(dateIso).toLocaleDateString(undefined, { weekday: "long" });
 }
 
 function parseWeekStartFromQuery(qsValue: string | null) {
   if (!qsValue) return null;
-  const d = new Date(`${qsValue}T00:00:00`);
+  const d = parseLocalDate(qsValue);
   if (Number.isNaN(d.getTime())) return null;
-  return isoDate(startOfWeekMonday(d));
+  return formatLocalDate(startOfWeekMonday(d));
 }
 
 function entryTypeLabel(t?: string) {
@@ -177,9 +186,18 @@ function entryTypeLabel(t?: string) {
   }
 }
 
-function TypeBadge({ type }: { type?: string }) {
+function TypeBadge({ type, jobAndKnock }: { type?: string; jobAndKnock?: boolean }) {
   const t = (type || "WORK").toUpperCase();
   const base = "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1";
+
+  if (t === "WORK" && jobAndKnock) {
+    return (
+      <span className={`${base} bg-sky-50 text-sky-800 ring-sky-200`}>
+        JOB &amp; KNOCK
+      </span>
+    );
+  }
+
   if (t === "WORK") return <span className={`${base} bg-cyan-50 text-cyan-800 ring-cyan-200`}>WORK</span>;
   if (t.startsWith("HOLIDAY"))
     return <span className={`${base} bg-purple-50 text-purple-800 ring-purple-200`}>HOLIDAY</span>;
@@ -189,10 +207,15 @@ function TypeBadge({ type }: { type?: string }) {
   return <span className={`${base} bg-slate-50 text-slate-700 ring-slate-200`}>{t}</span>;
 }
 
+function isWorkingDisplayEntry(e: Entry) {
+  const t = (e.type || "WORK").toUpperCase();
+  return t === "WORK" || t === "TRAINING";
+}
+
 function jobLabel(e: Entry) {
   const raw = (e.job || "").trim();
   if (raw) return raw;
-  return e.type && e.type !== "WORK" ? "(Non-work)" : "(No job)";
+  return e.type && !isWorkingDisplayEntry(e) ? "(Non-work)" : "(No job)";
 }
 
 export default function TimesheetPage() {
@@ -207,7 +230,7 @@ export default function TimesheetPage() {
 
   const [weekStartIso, setWeekStartIso] = useState(() => {
     const initial = parseWeekStartFromQuery(sp.get("weekStart"));
-    return initial ?? isoDate(startOfWeekMonday(new Date()));
+    return initial ?? formatLocalDate(startOfWeekMonday(new Date()));
   });
 
   useEffect(() => {
@@ -250,7 +273,7 @@ export default function TimesheetPage() {
   }, [weekStartIso]);
 
   const days = useMemo(() => {
-    const ws = week?.weekStart ? startOfWeekMonday(new Date(week.weekStart)) : startOfWeekMonday(new Date(weekStartIso));
+    const ws = week?.weekStart ? startOfWeekMonday(parseLocalDate(week.weekStart.slice(0, 10))) : startOfWeekMonday(parseLocalDate(weekStartIso));
     return Array.from({ length: 7 }).map((_, i) => {
       const d = addDays(ws, i);
       return { iso: dateKey(d) };
@@ -293,8 +316,8 @@ export default function TimesheetPage() {
     for (const [k, list] of map) {
       list.sort(
         (a, b) =>
-          new Date(`${dateKey(a.date)}T00:00:00`).getTime() -
-new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
+          parseLocalDate(dateKey(a.date)).getTime() -
+            parseLocalDate(dateKey(b.date)).getTime() ||
           (a.startTime || "").localeCompare(b.startTime || "")
       );
       map.set(k, list);
@@ -389,8 +412,8 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
                 type="date"
                 value={weekStartIso}
                 onChange={(e) => {
-                  const picked = new Date(e.target.value);
-                  setWeekStartIso(isoDate(startOfWeekMonday(picked)));
+                  const picked = parseLocalDate(e.target.value);
+                  setWeekStartIso(formatLocalDate(startOfWeekMonday(picked)));
                 }}
                 className="mt-1 rounded-xl bg-white px-3 py-2 text-sm text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
               />
@@ -415,7 +438,7 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
 
               <button
                 type="button"
-                onClick={() => setWeekStartIso(isoDate(startOfWeekMonday(new Date())))}
+                onClick={() => setWeekStartIso(formatLocalDate(startOfWeekMonday(new Date())))}
                 className="mt-5 inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50"
               >
                 Today
@@ -441,12 +464,12 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
           {isDraft ? (
             <Link
               href={`/timesheet/entry?weekStart=${encodeURIComponent(weekStartIso)}`}
-              className="ml-0 sm:ml-2 inline-flex items-center justify-center rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-cyan-400"
+              className="ml-0 inline-flex items-center justify-center rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-cyan-400 sm:ml-2"
             >
               + Add entry
             </Link>
           ) : (
-            <span className="ml-0 sm:ml-2 inline-flex items-center justify-center rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-500 cursor-not-allowed">
+            <span className="ml-0 inline-flex cursor-not-allowed items-center justify-center rounded-xl bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-500 sm:ml-2">
               Week locked
             </span>
           )}
@@ -472,7 +495,7 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
         <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div>
       ) : null}
 
-      <div className="mt-6 hidden overflow-auto rounded-3xl bg-white ring-1 ring-slate-200 shadow-sm md:block">
+      <div className="mt-6 hidden overflow-auto rounded-3xl bg-white shadow-sm ring-1 ring-slate-200 md:block">
         <table className="min-w-[1100px] w-full border-collapse">
           <thead>
             <tr className="bg-slate-50">
@@ -599,7 +622,7 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
         </table>
       </div>
 
-      <section className="mt-6 rounded-3xl bg-white p-6 ring-1 ring-slate-200 shadow-sm">
+      <section className="mt-6 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Entries (detailed)</h2>
@@ -648,7 +671,7 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
                         </div>
                       ) : null}
                       {day && day.overnightCount > 0 ? (
-                        <div className="text-[11px] text-emerald-700 font-semibold">
+                        <div className="font-semibold text-[11px] text-emerald-700">
                           Overnight +{fmtGBP(day.overnightAllowance)}
                         </div>
                       ) : null}
@@ -667,13 +690,15 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
                           <div className="flex items-start justify-between gap-3">
                             <div className="space-y-1">
                               <div className="flex items-center gap-2">
-                                <TypeBadge type={e.type} />
-                                <div className="text-sm font-semibold text-slate-900">{entryTypeLabel(e.type)}</div>
+                                <TypeBadge type={e.type} jobAndKnock={e.jobAndKnock} />
+                                <div className="text-sm font-semibold text-slate-900">
+                                  {e.jobAndKnock ? "Job & Knock" : entryTypeLabel(e.type)}
+                                </div>
                               </div>
 
                               <div className="text-xs text-slate-700">
                                 <span className="font-semibold">Job/Site:</span> {jobLabel(e)}
-                                {e.type && e.type !== "WORK" ? (
+                                {e.type && !isWorkingDisplayEntry(e) ? (
                                   <span className="ml-2 text-slate-500">(Non-work)</span>
                                 ) : null}
                               </div>
@@ -688,6 +713,12 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
                               {e.leftEarlyByChoice ? (
                                 <div className="text-xs font-semibold text-amber-700">
                                   Employee requested to finish early
+                                </div>
+                              ) : null}
+
+                              {e.jobAndKnock ? (
+                                <div className="text-xs font-semibold text-sky-700">
+                                  Job &amp; Knock applied
                                 </div>
                               ) : null}
 
@@ -730,16 +761,16 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
 
       <div className="mt-6 space-y-4 md:hidden">
         {loading ? (
-          <div className="rounded-3xl bg-white p-4 ring-1 ring-slate-200 text-slate-600 shadow-sm">Loading…</div>
+          <div className="rounded-3xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">Loading…</div>
         ) : !week ? (
-          <div className="rounded-3xl bg-white p-4 ring-1 ring-slate-200 text-slate-600 shadow-sm">No week loaded.</div>
+          <div className="rounded-3xl bg-white p-4 text-slate-600 shadow-sm ring-1 ring-slate-200">No week loaded.</div>
         ) : (
           days.map((d) => {
             const list = entriesByDay.get(d.iso) ?? [];
             const day = computedDayMap.get(d.iso);
 
             return (
-              <div key={d.iso} className="rounded-3xl bg-white p-4 ring-1 ring-slate-200 shadow-sm">
+              <div key={d.iso} className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
                 <div className="flex items-end justify-between">
                   <div className="text-sm font-semibold text-slate-900">{dayLong(d.iso)}</div>
                   <div className="text-xs text-slate-500">{shortDate(d.iso)}</div>
@@ -781,7 +812,7 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <div className="flex items-center gap-2">
-                                <TypeBadge type={e.type} />
+                                <TypeBadge type={e.type} jobAndKnock={e.jobAndKnock} />
                                 <div className="text-sm font-semibold text-slate-900">{jobLabel(e)}</div>
                               </div>
 
@@ -797,6 +828,12 @@ new Date(`${dateKey(b.date)}T00:00:00`).getTime() ||
                               {e.leftEarlyByChoice ? (
                                 <div className="mt-1 text-xs font-semibold text-amber-700">
                                   Employee requested to finish early
+                                </div>
+                              ) : null}
+
+                              {e.jobAndKnock ? (
+                                <div className="mt-1 text-xs font-semibold text-sky-700">
+                                  Job &amp; Knock applied
                                 </div>
                               ) : null}
 
