@@ -230,6 +230,96 @@ function calcWorkPreview(
   return { ok: true as const, error: null as any, total: totalHours, reg, otMonFri, otSat, otSunBh };
 }
 
+function calcJobAndKnockPreview(dateIso: string, startTime: string, finishTime: string) {
+  if (!dateIso) {
+    return {
+      ok: false as const,
+      error: "Date is required",
+      total: 0,
+      reg: 0,
+      otMonFri: 0,
+      otSat: 0,
+      otSunBh: 0,
+    };
+  }
+
+  const date = new Date(`${dateIso}T00:00:00`);
+  const startMin = parseHHMM(startTime);
+  const finishMinRaw = parseHHMM(finishTime);
+
+  if (Number.isNaN(date.getTime())) {
+    return {
+      ok: false as const,
+      error: "Invalid date",
+      total: 0,
+      reg: 0,
+      otMonFri: 0,
+      otSat: 0,
+      otSunBh: 0,
+    };
+  }
+  if (startMin === null) {
+    return {
+      ok: false as const,
+      error: "Invalid start time",
+      total: 0,
+      reg: 0,
+      otMonFri: 0,
+      otSat: 0,
+      otSunBh: 0,
+    };
+  }
+  if (finishMinRaw === null) {
+    return {
+      ok: false as const,
+      error: "Invalid finish time",
+      total: 0,
+      reg: 0,
+      otMonFri: 0,
+      otSat: 0,
+      otSunBh: 0,
+    };
+  }
+
+  let finishMin = finishMinRaw;
+  if (finishMinRaw < startMin) finishMin += 24 * 60;
+
+  const durationMin = finishMin - startMin;
+  if (durationMin <= 0) {
+    return {
+      ok: false as const,
+      error: "Finish must be after start",
+      total: 0,
+      reg: 0,
+      otMonFri: 0,
+      otSat: 0,
+      otSunBh: 0,
+    };
+  }
+
+  let totalHours = durationMin / 60;
+
+  if (totalHours >= 6) {
+    totalHours -= 0.5;
+  }
+
+  totalHours = round2(Math.max(0, totalHours));
+
+  const day = date.getDay();
+  const regularCap = day === 5 ? 5 : day >= 1 && day <= 4 ? 8 : 0;
+  const reg = round2(Math.min(regularCap, totalHours));
+
+  return {
+    ok: true as const,
+    error: null as any,
+    total: totalHours,
+    reg,
+    otMonFri: 0,
+    otSat: 0,
+    otSunBh: 0,
+  };
+}
+
 function Label({ children }: { children: React.ReactNode }) {
   return <div className="text-xs font-semibold text-slate-700">{children}</div>;
 }
@@ -263,6 +353,7 @@ export default function TimesheetEntryPageClient() {
   const [finishTime, setFinishTime] = useState("17:00");
   const [overnight, setOvernight] = useState(false);
   const [leftEarlyByChoice, setLeftEarlyByChoice] = useState(false);
+  const [jobAndKnock, setJobAndKnock] = useState(false);
   const [dismissedEarlyFinishCallout, setDismissedEarlyFinishCallout] = useState(false);
   const [description, setDescription] = useState("");
   const [agreedRate, setAgreedRate] = useState("");
@@ -296,7 +387,16 @@ export default function TimesheetEntryPageClient() {
     if (!isWork && leftEarlyByChoice) {
       setLeftEarlyByChoice(false);
     }
-  }, [isWork, leftEarlyByChoice]);
+    if (!isWork && jobAndKnock) {
+      setJobAndKnock(false);
+    }
+  }, [isWork, leftEarlyByChoice, jobAndKnock]);
+
+  useEffect(() => {
+    if (jobAndKnock && leftEarlyByChoice) {
+      setLeftEarlyByChoice(false);
+    }
+  }, [jobAndKnock, leftEarlyByChoice]);
 
   useEffect(() => {
     setDismissedEarlyFinishCallout(false);
@@ -339,11 +439,16 @@ export default function TimesheetEntryPageClient() {
       return { ok: true as const, error: null as any, total: 0, reg: 0, otMonFri: 0, otSat: 0, otSunBh: 0 };
     }
 
+    if (jobAndKnock) {
+      return calcJobAndKnockPreview(dateIso, startTime, finishTime);
+    }
+
     return calcWorkPreview(dateIso, startTime, finishTime, leftEarlyByChoice);
-  }, [dateIso, startTime, finishTime, isWork, type, leftEarlyByChoice]);
+  }, [dateIso, startTime, finishTime, isWork, type, leftEarlyByChoice, jobAndKnock]);
 
   const showEarlyFinishCallout =
     isWork &&
+    !jobAndKnock &&
     !leftEarlyByChoice &&
     !dismissedEarlyFinishCallout &&
     !!dateIso &&
@@ -375,6 +480,7 @@ export default function TimesheetEntryPageClient() {
         finishTime,
         overnight: !!overnight,
         leftEarlyByChoice: isWork ? !!leftEarlyByChoice : false,
+        jobAndKnock: isWork ? !!jobAndKnock : false,
         agreedRate: agreed,
         description: description.trim() ? description.trim() : null,
         job: isWork ? (job.trim() ? job.trim() : null) : null,
@@ -547,6 +653,40 @@ export default function TimesheetEntryPageClient() {
             </div>
           )}
 
+          {isWork ? (
+            <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">Job & Knock</div>
+                  <div className="text-sm text-slate-600">
+                    Pays standard hours only from the entered start and finish time, with no overtime.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJobAndKnock((v) => {
+                      const next = !v;
+                      if (next) setLeftEarlyByChoice(false);
+                      return next;
+                    });
+                  }}
+                  className={`h-10 w-16 rounded-full p-1 ring-1 transition ${
+                    jobAndKnock ? "bg-cyan-500 ring-cyan-400" : "bg-white ring-slate-300"
+                  }`}
+                  aria-label="Toggle Job and Knock"
+                >
+                  <div
+                    className={`h-8 w-8 rounded-full bg-white shadow transition ${
+                      jobAndKnock ? "translate-x-6" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {showEarlyFinishCallout ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
               <div className="text-sm font-semibold text-amber-900">This looks like an early finish</div>
@@ -560,6 +700,7 @@ export default function TimesheetEntryPageClient() {
                   type="button"
                   onClick={() => {
                     setLeftEarlyByChoice(true);
+                    setJobAndKnock(false);
                     setDismissedEarlyFinishCallout(true);
                   }}
                   className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-amber-400"
@@ -590,7 +731,13 @@ export default function TimesheetEntryPageClient() {
 
                 <button
                   type="button"
-                  onClick={() => setLeftEarlyByChoice((v) => !v)}
+                  onClick={() =>
+                    setLeftEarlyByChoice((v) => {
+                      const next = !v;
+                      if (next) setJobAndKnock(false);
+                      return next;
+                    })
+                  }
                   className={`h-10 w-16 rounded-full p-1 ring-1 transition ${
                     leftEarlyByChoice ? "bg-amber-500 ring-amber-400" : "bg-white ring-slate-300"
                   }`}

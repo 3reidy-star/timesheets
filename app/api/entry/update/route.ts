@@ -7,13 +7,22 @@ export const dynamic = "force-dynamic";
 
 type EntryType = "WORK" | "HOLIDAY_FULL" | "HOLIDAY_HALF" | "SICK" | "TRAINING";
 
+function startOfWeekMonday(d: Date) {
+  const date = new Date(d);
+  const day = date.getDay(); // 0 Sun .. 6 Sat
+  const diff = (day === 0 ? -6 : 1) - day;
+  date.setDate(date.getDate() + diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
 function toString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
 function toDate(value: unknown, field: string) {
   const s = typeof value === "string" ? value.trim() : "";
-  const d = new Date(s);
+  const d = new Date(`${s}T00:00:00`);
   if (!s || Number.isNaN(d.getTime())) throw new Error(`${field} must be a valid date`);
   return d;
 }
@@ -130,19 +139,80 @@ function calcWorkHours(
   return { hours, regularHours, otMonFriHours, otSatHours, otSunBhHours };
 }
 
+function calcJobAndKnockHours(date: Date, startTime: string, finishTime: string) {
+  const startMin = parseHHMM(startTime);
+  const finishMinRaw = parseHHMM(finishTime);
+  if (startMin === null) throw new Error("Invalid startTime");
+  if (finishMinRaw === null) throw new Error("Invalid finishTime");
+
+  let finishMin = finishMinRaw;
+  if (finishMinRaw < startMin) finishMin += 24 * 60;
+
+  const durationMin = finishMin - startMin;
+  if (durationMin <= 0) throw new Error("Finish must be after start");
+
+  let total = durationMin / 60;
+
+  if (total >= 6) {
+    total -= 0.5;
+  }
+
+  total = Math.max(0, total);
+
+  const regularCap = getRegularCapForDate(date);
+  const regularHours = round2(Math.min(regularCap, total));
+  const hours = regularHours;
+
+  return {
+    hours,
+    regularHours,
+    otMonFriHours: 0,
+    otSatHours: 0,
+    otSunBhHours: 0,
+  };
+}
+
+async function getOrCreateDevUser() {
+  const email = process.env.DEV_USER_EMAIL || "craig@test.com";
+  const name = process.env.DEV_USER_NAME || "Craig (Dev)";
+
+  const user =
+    (await prisma.user.findUnique({ where: { email } })) ??
+    (await prisma.user.create({
+      data: { email, name, role: "ENGINEER" },
+    }));
+
+  return user;
+}
+
 export async function POST(request: Request) {
   try {
+    const user = await getOrCreateDevUser();
     const body = await request.json();
 
     const id = toString(body?.id);
-    if (!id) return NextResponse.json({ error: "Missing entry id" }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ error: "Missing entry id" }, { status: 400 });
+    }
 
     const existing = await prisma.timesheetEntry.findUnique({
       where: { id },
-      select: { id: true, week: { select: { status: true } } },
+      select: {
+        id: true,
+        userId: true,
+        weekId: true,
+        week: { select: { id: true, status: true } },
+      },
     });
 
-    if (!existing) return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+    if (!existing) {
+      return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+    }
+
+    if (existing.userId !== user.id) {
+      return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+    }
+
     if (existing.week?.status !== "DRAFT") {
       return NextResponse.json({ error: "Week is locked and cannot be edited" }, { status: 400 });
     }
@@ -156,6 +226,7 @@ export async function POST(request: Request) {
 
     const overnightAllowance = !!body?.overnight;
     const leftEarlyByChoice = toBoolean(body?.leftEarlyByChoice);
+    const jobAndKnock = toBoolean(body?.jobAndKnock);
 
     const defaultWorkTimes = standardTimesForDate(date);
 
@@ -174,12 +245,21 @@ export async function POST(request: Request) {
       startTime = toHHMM(body?.startTime, defaultWorkTimes.start);
       finishTime = toHHMM(body?.finishTime, defaultWorkTimes.finish);
 
-      const calc = calcWorkHours(date, startTime, finishTime, leftEarlyByChoice);
-      hours = calc.hours;
-      regularHours = calc.regularHours;
-      otMonFriHours = calc.otMonFriHours;
-      otSatHours = calc.otSatHours;
-      otSunBhHours = calc.otSunBhHours;
+      if (jobAndKnock) {
+        const calc = calcJobAndKnockHours(date, startTime, finishTime);
+        hours = calc.hours;
+        regularHours = calc.regularHours;
+        otMonFriHours = calc.otMonFriHours;
+        otSatHours = calc.otSatHours;
+        otSunBhHours = calc.otSunBhHours;
+      } else {
+        const calc = calcWorkHours(date, startTime, finishTime, leftEarlyByChoice);
+        hours = calc.hours;
+        regularHours = calc.regularHours;
+        otMonFriHours = calc.otMonFriHours;
+        otSatHours = calc.otSatHours;
+        otSunBhHours = calc.otSunBhHours;
+      }
     } else {
       const base = standardPaidHoursForDate(date);
 
@@ -205,9 +285,38 @@ export async function POST(request: Request) {
       otSunBhHours = 0;
     }
 
+    const newWeekStart = startOfWeekMonday(date);
+    const targetWeek = await prisma.timesheetWeek.upsert({
+      where: {
+        userId_weekStart: {
+          userId: user.id,
+          weekStart: newWeekStart,
+        },
+      },
+      update: {},
+      create: {
+        userId: user.id,
+        weekStart: newWeekStart,
+        status: "DRAFT",
+      },
+      select: {
+        id: true,
+        weekStart: true,
+        status: true,
+      },
+    });
+
+    if (targetWeek.status !== "DRAFT") {
+      return NextResponse.json(
+        { error: "Target week is locked and cannot be edited" },
+        { status: 400 }
+      );
+    }
+
     await prisma.timesheetEntry.update({
       where: { id },
       data: {
+        weekId: targetWeek.id,
         date,
         type,
         job: job || "",
@@ -221,11 +330,16 @@ export async function POST(request: Request) {
         otMonFriHours,
         otSatHours,
         otSunBhHours,
-        leftEarlyByChoice: type === "WORK" ? leftEarlyByChoice : false,
+        leftEarlyByChoice: type === "WORK" && !jobAndKnock ? leftEarlyByChoice : false,
+        jobAndKnock: type === "WORK" ? jobAndKnock : false,
       },
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      weekId: targetWeek.id,
+      weekStart: targetWeek.weekStart,
+    });
   } catch (e: any) {
     console.error("api/entry/update POST error:", e);
     return NextResponse.json({ error: e?.message ?? "Failed to update entry" }, { status: 500 });

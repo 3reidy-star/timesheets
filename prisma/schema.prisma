@@ -42,7 +42,7 @@ model TimesheetWeek {
 }
 
 model TimesheetEntry {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
 
   weekId            String
   userId            String
@@ -58,24 +58,25 @@ model TimesheetEntry {
 
   hours             Float
 
-  startTime         String   @default("08:00")
-  finishTime        String   @default("17:00")
+  startTime         String    @default("08:00")
+  finishTime        String    @default("17:00")
 
-  regularHours      Float    @default(0)
-  otMonFriHours     Float    @default(0)
-  otSatHours        Float    @default(0)
-  otSunBhHours      Float    @default(0)
+  regularHours      Float     @default(0)
+  otMonFriHours     Float     @default(0)
+  otSatHours        Float     @default(0)
+  otSunBhHours      Float     @default(0)
 
-  leftEarlyByChoice Boolean  @default(false)
+  leftEarlyByChoice Boolean   @default(false)
+  jobAndKnock       Boolean   @default(false)
 
-  overnight         Boolean  @default(false)
+  overnight         Boolean   @default(false)
   agreedRate        Float?
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @default(now()) @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
 
-  week    TimesheetWeek @relation(fields: [weekId], references: [id])
-  user    User          @relation(fields: [userId], references: [id])
+  week              TimesheetWeek @relation(fields: [weekId], references: [id])
+  user              User          @relation(fields: [userId], references: [id])
 
   @@index([weekId])
   @@index([userId])
@@ -85,16 +86,16 @@ model TimesheetEntry {
 }
 
 model WeekAudit {
-  id            String      @id @default(cuid())
+  id            String        @id @default(cuid())
 
   weekId        String
   action        WeekAction
   comment       String?
 
   performedById String
-  performedBy   User        @relation("WeekAuditPerformedBy", fields: [performedById], references: [id])
+  performedBy   User          @relation("WeekAuditPerformedBy", fields: [performedById], references: [id])
 
-  createdAt     DateTime    @default(now())
+  createdAt     DateTime      @default(now())
 
   week          TimesheetWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
 

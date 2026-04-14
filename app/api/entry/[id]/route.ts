@@ -46,6 +46,7 @@ export async function GET(
         otSunBhHours: true,
         overnight: true,
         leftEarlyByChoice: true,
+        jobAndKnock: true,
         agreedRate: true,
         createdAt: true,
         updatedAt: true,

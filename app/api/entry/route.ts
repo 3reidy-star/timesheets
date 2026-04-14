@@ -35,7 +35,7 @@ function toString(value: unknown) {
 
 function toDate(value: unknown, field: string) {
   const s = typeof value === "string" ? value.trim() : "";
-  const d = new Date(s);
+  const d = new Date(`${s}T00:00:00`);
   if (!s || Number.isNaN(d.getTime())) throw new Error(`${field} must be a valid date`);
   return d;
 }
@@ -128,11 +128,6 @@ function getRegularCapForDate(date: Date) {
  * - do NOT deduct break
  * - pay actual worked hours
  * - split into regular/overtime from actual hours
- *
- * Example:
- * 05:00 to 14:00 with leftEarlyByChoice=true
- * = 9.0 hours
- * = 8.0 regular + 1.0 OT (Mon-Thu)
  */
 function calcWorkHours(
   date: Date,
@@ -182,6 +177,47 @@ function calcWorkHours(
   return { hours, regularHours, otMonFriHours, otSatHours, otSunBhHours };
 }
 
+/**
+ * JOB & KNOCK calculation.
+ * - still a WORK entry
+ * - deducts normal unpaid break for 6+ hour shifts
+ * - pays regular hours only
+ * - caps paid hours at the normal daily regular cap
+ * - never creates overtime
+ */
+function calcJobAndKnockHours(date: Date, startTime: string, finishTime: string) {
+  const startMin = parseHHMM(startTime);
+  const finishMinRaw = parseHHMM(finishTime);
+  if (startMin === null) throw new Error("Invalid startTime");
+  if (finishMinRaw === null) throw new Error("Invalid finishTime");
+
+  let finishMin = finishMinRaw;
+  if (finishMinRaw < startMin) finishMin += 24 * 60;
+
+  const durationMin = finishMin - startMin;
+  if (durationMin <= 0) throw new Error("Finish must be after start");
+
+  let total = durationMin / 60;
+
+  if (total >= 6) {
+    total -= 0.5;
+  }
+
+  total = Math.max(0, total);
+
+  const regularCap = getRegularCapForDate(date);
+  const regularHours = round2(Math.min(regularCap, total));
+  const hours = regularHours;
+
+  return {
+    hours,
+    regularHours,
+    otMonFriHours: 0,
+    otSatHours: 0,
+    otSunBhHours: 0,
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const user = await getOrCreateDevUser();
@@ -196,6 +232,7 @@ export async function POST(request: Request) {
 
     const overnightAllowance = !!body?.overnight;
     const leftEarlyByChoice = toBoolean(body?.leftEarlyByChoice);
+    const jobAndKnock = toBoolean(body?.jobAndKnock);
 
     const weekStart = startOfWeekMonday(date);
     const week = await prisma.timesheetWeek.upsert({
@@ -221,12 +258,21 @@ export async function POST(request: Request) {
       startTime = toHHMM(body?.startTime, defaultWorkTimes.start);
       finishTime = toHHMM(body?.finishTime, defaultWorkTimes.finish);
 
-      const calc = calcWorkHours(date, startTime, finishTime, leftEarlyByChoice);
-      hours = calc.hours;
-      regularHours = calc.regularHours;
-      otMonFriHours = calc.otMonFriHours;
-      otSatHours = calc.otSatHours;
-      otSunBhHours = calc.otSunBhHours;
+      if (jobAndKnock) {
+        const calc = calcJobAndKnockHours(date, startTime, finishTime);
+        hours = calc.hours;
+        regularHours = calc.regularHours;
+        otMonFriHours = calc.otMonFriHours;
+        otSatHours = calc.otSatHours;
+        otSunBhHours = calc.otSunBhHours;
+      } else {
+        const calc = calcWorkHours(date, startTime, finishTime, leftEarlyByChoice);
+        hours = calc.hours;
+        regularHours = calc.regularHours;
+        otMonFriHours = calc.otMonFriHours;
+        otSatHours = calc.otSatHours;
+        otSunBhHours = calc.otSunBhHours;
+      }
     } else {
       const base = standardPaidHoursForDate(date);
 
@@ -267,7 +313,8 @@ export async function POST(request: Request) {
         otMonFriHours,
         otSatHours,
         otSunBhHours,
-        leftEarlyByChoice: type === "WORK" ? leftEarlyByChoice : false,
+        leftEarlyByChoice: type === "WORK" && !jobAndKnock ? leftEarlyByChoice : false,
+        jobAndKnock: type === "WORK" ? jobAndKnock : false,
         overnight: overnightAllowance,
         agreedRate,
       },
