@@ -16,6 +16,7 @@ type EntryLike = {
   otSunBhHours: number;
   overnight: boolean;
   leftEarlyByChoice?: boolean;
+  jobAndKnock?: boolean;
   startTime?: string;
   finishTime?: string;
 };
@@ -91,14 +92,13 @@ function coreWindowForDate(d: Date) {
  * - anything before core start or after core finish is weekday OT
  * - only used for normal WORK/TRAINING days
  *
- * If leftEarlyByChoice is true, we DO NOT use this rule.
- * For those days we trust the stored entry buckets instead:
- * - regularHours
- * - otMonFriHours / otSatHours / otSunBhHours
+ * If leftEarlyByChoice or jobAndKnock is true, we do not use this rule.
+ * For those days we trust the stored entry buckets instead.
  */
 function computeEntryWeekdayOT(entry: EntryLike) {
   if (!isWorkingType(entry.type)) return 0;
   if (entry.leftEarlyByChoice) return 0;
+  if (entry.jobAndKnock) return 0;
 
   const date = new Date(entry.date);
   const dow = date.getDay();
@@ -136,10 +136,6 @@ function computeWeek(entries: EntryLike[]) {
     byDay.set(key, [...(byDay.get(key) ?? []), e]);
   }
 
-  const hasAnyLeftEarlyByChoice = entries.some(
-    (e) => isWorkingType(e.type) && !!e.leftEarlyByChoice
-  );
-
   const days = [...byDay.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([dateIso, list]) => {
@@ -148,6 +144,7 @@ function computeWeek(entries: EntryLike[]) {
 
       const workingEntries = list.filter((e) => isWorkingType(e.type));
       const hasLeftEarlyWorking = workingEntries.some((e) => !!e.leftEarlyByChoice);
+      const hasJobAndKnockWorking = workingEntries.some((e) => !!e.jobAndKnock);
 
       const workedHours = round2(
         workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
@@ -160,16 +157,12 @@ function computeWeek(entries: EntryLike[]) {
       let otSunBhHours = 0;
       let breakHours = 0;
 
-      if (hasLeftEarlyWorking) {
+      if (hasLeftEarlyWorking || hasJobAndKnockWorking) {
         /**
-         * Left early by choice day:
-         * - no core top-up
-         * - no weekday core-window OT logic
-         * - use the stored entry split exactly
-         *
-         * Example:
-         * 05:00–14:00 with leftEarlyByChoice=true
-         * => 8 regular + 1 OT
+         * Stored-hours day:
+         * - leftEarlyByChoice: use stored regular + stored OT
+         * - jobAndKnock: use stored regular only, no OT
+         * - no core-window recalculation here
          */
         regularHours = round2(
           list.reduce((sum, e) => sum + (Number(e.regularHours) || 0), 0)
@@ -267,11 +260,9 @@ function computeWeek(entries: EntryLike[]) {
 
   /**
    * Business top-up:
-   * - normal weeks get +0.5
-   * - if the employee has any "left early by choice" working entry that week,
-   *   do not add the free 0.5
+   * - always include +0.5 for the week
    */
-  const businessTopUpHours = hasAnyLeftEarlyByChoice ? 0 : 0.5;
+  const businessTopUpHours = 0.5;
   const overtimeTotal = round2(totals.otMonFriHours + totals.otSatHours + totals.otSunBhHours);
   const paidHours = round2(totals.regularHours + businessTopUpHours + overtimeTotal);
 
@@ -290,7 +281,7 @@ function computeWeek(entries: EntryLike[]) {
       overtimeTotal,
       overnightCount: totals.overnightCount,
       overnightAllowance: round2(totals.overnightAllowance),
-      hasAnyLeftEarlyByChoice,
+      hasAnyLeftEarlyByChoice: false,
     },
     rules: {
       weeklyCorePaidHours: 37,
@@ -300,7 +291,7 @@ function computeWeek(entries: EntryLike[]) {
       unpaidBreakHours: 0.5,
       workingTypes: ["WORK", "TRAINING"],
       leftEarlyByChoice:
-        "No core top-up. Pay stored regular hours plus stored overtime only.",
+        "Pay stored regular hours plus stored overtime. Weekly business top-up still applies.",
     },
   };
 }
@@ -314,7 +305,7 @@ export async function GET(req: Request) {
 
     const requested =
       weekStartParam && !Number.isNaN(new Date(weekStartParam).getTime())
-        ? new Date(weekStartParam)
+        ? new Date(`${weekStartParam}T00:00:00`)
         : null;
 
     const weekStart = requested ? startOfWeekMonday(requested) : startOfWeekMonday(new Date());
@@ -349,18 +340,21 @@ export async function GET(req: Request) {
     }
 
     const computed = computeWeek(existing.entries as EntryLike[]);
-console.log(
-  existing.entries.map((e: any) => ({
-    id: e.id,
-    date: e.date,
-    startTime: e.startTime,
-    finishTime: e.finishTime,
-    hours: e.hours,
-    regularHours: e.regularHours,
-    otMonFriHours: e.otMonFriHours,
-    leftEarlyByChoice: e.leftEarlyByChoice,
-  }))
-);
+
+    console.log(
+      existing.entries.map((e: any) => ({
+        id: e.id,
+        date: e.date,
+        startTime: e.startTime,
+        finishTime: e.finishTime,
+        hours: e.hours,
+        regularHours: e.regularHours,
+        otMonFriHours: e.otMonFriHours,
+        leftEarlyByChoice: e.leftEarlyByChoice,
+        jobAndKnock: e.jobAndKnock,
+      }))
+    );
+
     return NextResponse.json({
       week: existing,
       computed,
