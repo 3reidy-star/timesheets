@@ -231,18 +231,6 @@ function calcWorkPreview(
 }
 
 function calcJobAndKnockPreview(dateIso: string, startTime: string, finishTime: string) {
-  if (!dateIso) {
-    return {
-      ok: false as const,
-      error: "Date is required",
-      total: 0,
-      reg: 0,
-      otMonFri: 0,
-      otSat: 0,
-      otSunBh: 0,
-    };
-  }
-
   const date = new Date(`${dateIso}T00:00:00`);
   const startMin = parseHHMM(startTime);
   const finishMinRaw = parseHHMM(finishTime);
@@ -297,23 +285,14 @@ function calcJobAndKnockPreview(dateIso: string, startTime: string, finishTime: 
     };
   }
 
-  let totalHours = durationMin / 60;
-
-  if (totalHours >= 6) {
-    totalHours -= 0.5;
-  }
-
-  totalHours = round2(Math.max(0, totalHours));
-
   const day = date.getDay();
   const regularCap = day === 5 ? 5 : day >= 1 && day <= 4 ? 8 : 0;
-  const reg = round2(Math.min(regularCap, totalHours));
 
   return {
     ok: true as const,
     error: null as any,
-    total: totalHours,
-    reg,
+    total: regularCap,
+    reg: regularCap,
     otMonFri: 0,
     otSat: 0,
     otSunBh: 0,
@@ -659,7 +638,7 @@ export default function TimesheetEntryPageClient() {
                 <div>
                   <div className="text-sm font-semibold text-slate-900">Job & Knock</div>
                   <div className="text-sm text-slate-600">
-                    Pays standard hours only from the entered start and finish time, with no overtime.
+                    Pays the full standard basic day for the selected day, with no overtime.
                   </div>
                 </div>
 
