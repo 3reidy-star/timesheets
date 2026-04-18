@@ -141,7 +141,7 @@ function calcWorkHours(
   if (finishMinRaw === null) throw new Error("Invalid finishTime");
 
   let finishMin = finishMinRaw;
-  if (finishMinRaw < startMin) finishMin += 24 * 60; // crosses midnight
+  if (finishMinRaw < startMin) finishMin += 24 * 60;
 
   const durationMin = finishMin - startMin;
   if (durationMin <= 0) throw new Error("Finish must be after start");
@@ -180,10 +180,11 @@ function calcWorkHours(
 /**
  * JOB & KNOCK calculation.
  * - still a WORK entry
- * - deducts normal unpaid break for 6+ hour shifts
- * - pays regular hours only
- * - caps paid hours at the normal daily regular cap
- * - never creates overtime
+ * - requires a valid worked shift
+ * - once valid, pays the full standard basic day for the selected date
+ * - Mon–Thu = 8.0
+ * - Fri = 5.0
+ * - no overtime
  */
 function calcJobAndKnockHours(date: Date, startTime: string, finishTime: string) {
   const startMin = parseHHMM(startTime);
@@ -197,20 +198,10 @@ function calcJobAndKnockHours(date: Date, startTime: string, finishTime: string)
   const durationMin = finishMin - startMin;
   if (durationMin <= 0) throw new Error("Finish must be after start");
 
-  let total = durationMin / 60;
-
-  if (total >= 6) {
-    total -= 0.5;
-  }
-
-  total = Math.max(0, total);
-
-  const regularCap = getRegularCapForDate(date);
-  const regularHours = round2(Math.min(regularCap, total));
-  const hours = regularHours;
+  const regularHours = round2(getRegularCapForDate(date));
 
   return {
-    hours,
+    hours: regularHours,
     regularHours,
     otMonFriHours: 0,
     otSatHours: 0,
