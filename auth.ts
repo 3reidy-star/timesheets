@@ -1,67 +1,60 @@
 import NextAuth from "next-auth";
-import Credentials from "next-auth/providers/credentials";
+import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
+import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/app/lib/prisma";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
+  adapter: PrismaAdapter(prisma),
 
-  pages: { signIn: "/login" },
+  session: {
+    strategy: "database",
+  },
+
+  pages: {
+    signIn: "/login",
+  },
 
   providers: [
-    Credentials({
-      name: "Credentials",
-      credentials: {
-        email: {},
-        password: {},
-      },
-      async authorize(credentials) {
-        const email = credentials?.email as string;
-        const password = credentials?.password as string;
-
-        if (
-          email === process.env.AUTH_TEST_EMAIL &&
-          password === process.env.AUTH_TEST_PASSWORD
-        ) {
-          let user = await prisma.user.findUnique({
-            where: { email },
-          });
-
-          if (!user) {
-            user = await prisma.user.create({
-              data: {
-                email,
-                name: "Test User",
-                role: "ENGINEER",
-              },
-            });
-          }
-
-          return {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            role: user.role,
-          } as any;
-        }
-
-        return null;
-      },
+    MicrosoftEntraID({
+      clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID!,
+      clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET!,
+      issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER!,
     }),
   ],
 
   callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
-        token.id = (user as any).id;
-        token.role = (user as any).role;
-      }
-      return token;
+    async signIn({ user }) {
+      const email = user.email?.trim().toLowerCase();
+      if (!email) return false;
+
+      const existing = await prisma.user.findUnique({
+        where: { email },
+      });
+
+      return !!existing;
     },
-    async session({ session, token }) {
+
+    async session({ session, user }) {
       if (session.user) {
-        (session.user as any).id = token.id;
-        (session.user as any).role = token.role;
+        (session.user as any).id = user.id;
+
+        const dbUser = await prisma.user.findUnique({
+          where: { id: user.id },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+          },
+        });
+
+        if (dbUser) {
+          session.user.name = dbUser.name;
+          session.user.email = dbUser.email;
+          (session.user as any).role = dbUser.role;
+        }
       }
+
       return session;
     },
   },

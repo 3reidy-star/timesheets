@@ -1,5 +1,6 @@
 export const runtime = "nodejs";
 
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 
@@ -9,6 +10,31 @@ const BREAK_HOURS = 0.5;
 
 export async function GET() {
   try {
+    const session = await auth();
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: {
+        id: true,
+        role: true,
+      },
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 403 });
+    }
+
+    if (user.role !== "ADMIN" && user.role !== "ACCOUNTS") {
+      return NextResponse.json(
+        { error: "Not authorised to view submitted weeks" },
+        { status: 403 }
+      );
+    }
+
     const weeks = await prisma.timesheetWeek.findMany({
       where: { status: "SUBMITTED" },
       orderBy: { weekStart: "desc" },
@@ -22,15 +48,18 @@ export async function GET() {
     const formatted = weeks.map((w) => {
       const entries = w.entries ?? [];
 
-      // Old/raw total (kept for compatibility)
-      const totalHours = round2(entries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0));
+      const totalHours = round2(
+        entries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
+      );
 
-      // Working hours (WORK + TRAINING only)
-      const workingEntries = entries.filter((e) => WORKING_TYPES.has(String(e.type || "WORK").toUpperCase()));
-      const workingHours = round2(workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0));
+      const workingEntries = entries.filter((e) =>
+        WORKING_TYPES.has(String(e.type || "WORK").toUpperCase())
+      );
+      const workingHours = round2(
+        workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
+      );
 
-      // Break is per-day, based on combined working hours
-      const byDay = new Map<string, number>(); // YYYY-MM-DD -> working hours that day
+      const byDay = new Map<string, number>();
       for (const e of workingEntries) {
         const k = dayKeyUTC(e.date);
         byDay.set(k, (byDay.get(k) ?? 0) + (Number(e.hours) || 0));
@@ -48,15 +77,10 @@ export async function GET() {
         id: w.id,
         weekStart: w.weekStart,
         status: w.status,
-
-        // keep existing field (raw total of all entry.hours)
         totalHours,
-
-        // new fields (what approvals should use)
         workingHours,
         breakHours,
         paidHours,
-
         user: w.user,
       };
     });
@@ -71,7 +95,10 @@ export async function GET() {
       },
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? "Failed to load submitted weeks" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message ?? "Failed to load submitted weeks" },
+      { status: 500 }
+    );
   }
 }
 

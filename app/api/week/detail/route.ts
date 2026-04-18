@@ -1,5 +1,6 @@
 export const runtime = "nodejs";
 
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 
@@ -13,6 +14,31 @@ const BREAK_HOURS = 0.5;
 
 export async function GET(req: Request) {
   try {
+    const session = await auth();
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: {
+        id: true,
+        role: true,
+      },
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 403 });
+    }
+
+    if (user.role !== "ADMIN" && user.role !== "ACCOUNTS") {
+      return NextResponse.json(
+        { error: "Not authorised to view week detail" },
+        { status: 403 }
+      );
+    }
+
     const url = new URL(req.url);
     const weekId = getString(url.searchParams.get("weekId"));
 
@@ -42,7 +68,6 @@ export async function GET(req: Request) {
 
     const entries = week.entries ?? [];
 
-    // Existing totals (leave as-is so no other UI breaks)
     const totals = {
       hours: round2(entries.reduce((s, e) => s + (Number((e as any).hours) || 0), 0)),
       regular: round2(entries.reduce((s, e) => s + (Number((e as any).regularHours) || 0), 0)),
@@ -51,7 +76,6 @@ export async function GET(req: Request) {
       otSunBh: round2(entries.reduce((s, e) => s + (Number((e as any).otSunBhHours) || 0), 0)),
     };
 
-    // NEW: break + paid totals computed per day (WORK + TRAINING count as "working")
     const computed = computePaidAndBreak(entries);
 
     return NextResponse.json({
@@ -64,8 +88,6 @@ export async function GET(req: Request) {
         entries: week.entries,
         audits: week.audits,
         totals,
-
-        // add these without removing anything
         computed,
       },
     });
@@ -101,7 +123,7 @@ function computePaidAndBreak(entries: any[]) {
       const paidHours = Math.max(0, workingHours - breakHours);
 
       return {
-        date, // YYYY-MM-DD
+        date,
         workingHours: round2(workingHours),
         breakHours: round2(breakHours),
         paidHours: round2(paidHours),
@@ -134,7 +156,6 @@ function computePaidAndBreak(entries: any[]) {
   };
 }
 
-// Stable day key in UTC so dates don't drift with timezone
 function dayKeyUTC(d: Date | string) {
   const dt = typeof d === "string" ? new Date(d) : d;
   const y = dt.getUTCFullYear();

@@ -1,5 +1,6 @@
 export const runtime = "nodejs";
 
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 
@@ -55,46 +56,25 @@ function dayKeyUTC(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-async function getOrCreateDevUser() {
-  const email = process.env.DEV_USER_EMAIL || "craig@test.com";
-  const name = process.env.DEV_USER_NAME || "Craig (Dev)";
-
-  const user =
-    (await prisma.user.findUnique({ where: { email } })) ??
-    (await prisma.user.create({
-      data: { email, name, role: "ENGINEER" },
-    }));
-
-  return user;
-}
-
 function isWorkingType(type: string) {
   const t = (type || "WORK").toUpperCase();
   return t === "WORK" || t === "TRAINING";
 }
 
 function corePaidHoursForDate(d: Date) {
-  const dow = d.getDay(); // 0 Sun .. 6 Sat
-  if (dow >= 1 && dow <= 4) return 8; // Mon-Thu
-  if (dow === 5) return 5; // Fri
+  const dow = d.getDay();
+  if (dow >= 1 && dow <= 4) return 8;
+  if (dow === 5) return 5;
   return 0;
 }
 
 function coreWindowForDate(d: Date) {
   const dow = d.getDay();
-  if (dow >= 1 && dow <= 4) return { start: 8 * 60 + 30, end: 17 * 60 }; // 08:30–17:00
-  if (dow === 5) return { start: 8 * 60 + 30, end: 14 * 60 }; // 08:30–14:00
+  if (dow >= 1 && dow <= 4) return { start: 8 * 60 + 30, end: 17 * 60 };
+  if (dow === 5) return { start: 8 * 60 + 30, end: 14 * 60 };
   return null;
 }
 
-/**
- * Normal weekday OT rule:
- * - anything before core start or after core finish is weekday OT
- * - only used for normal WORK/TRAINING days
- *
- * If leftEarlyByChoice or jobAndKnock is true, we do not use this rule.
- * For those days we trust the stored entry buckets instead.
- */
 function computeEntryWeekdayOT(entry: EntryLike) {
   if (!isWorkingType(entry.type)) return 0;
   if (entry.leftEarlyByChoice) return 0;
@@ -158,12 +138,6 @@ function computeWeek(entries: EntryLike[]) {
       let breakHours = 0;
 
       if (hasLeftEarlyWorking || hasJobAndKnockWorking) {
-        /**
-         * Stored-hours day:
-         * - leftEarlyByChoice: use stored regular + stored OT
-         * - jobAndKnock: use stored regular only, no OT
-         * - no core-window recalculation here
-         */
         regularHours = round2(
           list.reduce((sum, e) => sum + (Number(e.regularHours) || 0), 0)
         );
@@ -258,12 +232,10 @@ function computeWeek(entries: EntryLike[]) {
     }
   );
 
-  /**
-   * Business top-up:
-   * - always include +0.5 for the week
-   */
   const businessTopUpHours = 0.5;
-  const overtimeTotal = round2(totals.otMonFriHours + totals.otSatHours + totals.otSunBhHours);
+  const overtimeTotal = round2(
+    totals.otMonFriHours + totals.otSatHours + totals.otSunBhHours
+  );
   const paidHours = round2(totals.regularHours + businessTopUpHours + overtimeTotal);
 
   return {
@@ -298,7 +270,19 @@ function computeWeek(entries: EntryLike[]) {
 
 export async function GET(req: Request) {
   try {
-    const user = await getOrCreateDevUser();
+    const session = await auth();
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 403 });
+    }
 
     const url = new URL(req.url);
     const weekStartParam = getString(url.searchParams.get("weekStart"));
@@ -340,20 +324,6 @@ export async function GET(req: Request) {
     }
 
     const computed = computeWeek(existing.entries as EntryLike[]);
-
-    console.log(
-      existing.entries.map((e: any) => ({
-        id: e.id,
-        date: e.date,
-        startTime: e.startTime,
-        finishTime: e.finishTime,
-        hours: e.hours,
-        regularHours: e.regularHours,
-        otMonFriHours: e.otMonFriHours,
-        leftEarlyByChoice: e.leftEarlyByChoice,
-        jobAndKnock: e.jobAndKnock,
-      }))
-    );
 
     return NextResponse.json({
       week: existing,

@@ -1,5 +1,6 @@
 export const runtime = "nodejs";
 
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 
@@ -171,22 +172,22 @@ function calcJobAndKnockHours(date: Date, startTime: string, finishTime: string)
   };
 }
 
-async function getOrCreateDevUser() {
-  const email = process.env.DEV_USER_EMAIL || "craig@test.com";
-  const name = process.env.DEV_USER_NAME || "Craig (Dev)";
-
-  const user =
-    (await prisma.user.findUnique({ where: { email } })) ??
-    (await prisma.user.create({
-      data: { email, name, role: "ENGINEER" },
-    }));
-
-  return user;
-}
-
 export async function POST(request: Request) {
   try {
-    const user = await getOrCreateDevUser();
+    const session = await auth();
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 403 });
+    }
+
     const body = await request.json();
 
     const id = toString(body?.id);

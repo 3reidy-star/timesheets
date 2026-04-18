@@ -1,5 +1,6 @@
 export const runtime = "nodejs";
 
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 
@@ -7,20 +8,31 @@ function getString(v: unknown) {
   return typeof v === "string" ? v.trim() : "";
 }
 
-async function getDevUser() {
-  const email = process.env.DEV_USER_EMAIL || "craig@test.com";
-
-  const user =
-    (await prisma.user.findUnique({ where: { email } })) ??
-    (await prisma.user.create({
-      data: { email, name: "Dev Reviewer", role: "ADMIN" },
-    }));
-
-  return user;
-}
-
 export async function POST(req: Request) {
   try {
+    const session = await auth();
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const reviewer = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+      },
+    });
+
+    if (!reviewer) {
+      return NextResponse.json({ error: "User not found" }, { status: 403 });
+    }
+
+    if (reviewer.role !== "ADMIN" && reviewer.role !== "ACCOUNTS") {
+      return NextResponse.json({ error: "Not authorised to review weeks" }, { status: 403 });
+    }
+
     const body = await req.json();
 
     const weekId = getString(body?.weekId);
@@ -39,15 +51,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Strongly recommended: require reason on rejection
     if (action === "REJECT" && !comment) {
       return NextResponse.json(
         { error: "Comment is required when rejecting a week." },
         { status: 400 }
       );
     }
-
-    const reviewer = await getDevUser();
 
     const week = await prisma.timesheetWeek.findUnique({
       where: { id: weekId },
@@ -65,7 +74,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Policy:
+    // Policy:
     // - approve locks
     // - reject returns to draft for editing
     const newStatus = action === "APPROVE" ? "APPROVED" : "DRAFT";
