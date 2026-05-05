@@ -1,18 +1,11 @@
 import NextAuth from "next-auth";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
-import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/app/lib/prisma";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(prisma),
+  session: { strategy: "jwt" },
 
-  session: {
-    strategy: "database",
-  },
-
-  pages: {
-    signIn: "/login",
-  },
+  pages: { signIn: "/login" },
 
   providers: [
     MicrosoftEntraID({
@@ -23,36 +16,53 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
 
   callbacks: {
-    async signIn({ user }) {
-      const email = user.email?.trim().toLowerCase();
-      if (!email) return false;
+    async signIn({ user, profile }) {
+      const email =
+        user.email?.toLowerCase().trim() ||
+        (profile as any)?.email?.toLowerCase().trim() ||
+        (profile as any)?.preferred_username?.toLowerCase().trim();
 
-      const existing = await prisma.user.findUnique({
+      if (!email) return false;
+      if (!email.endsWith("@pfgbltd.com")) return false;
+
+      const dbUser = await prisma.user.findUnique({
         where: { email },
       });
 
-      return !!existing;
+      return !!dbUser;
     },
 
-    async session({ session, user }) {
-      if (session.user) {
-        (session.user as any).id = user.id;
+    async jwt({ token }) {
+      const email = token.email?.toLowerCase().trim();
 
+      if (email) {
         const dbUser = await prisma.user.findUnique({
-          where: { id: user.id },
+          where: { email },
           select: {
             id: true,
+            role: true,
             name: true,
             email: true,
-            role: true,
           },
         });
 
         if (dbUser) {
-          session.user.name = dbUser.name;
-          session.user.email = dbUser.email;
-          (session.user as any).role = dbUser.role;
+          token.id = dbUser.id;
+          token.role = dbUser.role;
+          token.name = dbUser.name;
+          token.email = dbUser.email;
         }
+      }
+
+      return token;
+    },
+
+    async session({ session, token }) {
+      if (session.user) {
+        (session.user as any).id = token.id;
+        (session.user as any).role = token.role;
+        session.user.name = token.name;
+        session.user.email = token.email ?? session.user.email;
       }
 
       return session;
