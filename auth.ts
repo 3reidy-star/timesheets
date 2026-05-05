@@ -1,8 +1,11 @@
 import NextAuth from "next-auth";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
+import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "@/app/lib/prisma";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  adapter: PrismaAdapter(prisma),
+
   session: { strategy: "jwt" },
 
   pages: { signIn: "/login" },
@@ -16,55 +19,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
 
   callbacks: {
-    async signIn({ user, profile }) {
-      const email =
-        user.email?.toLowerCase().trim() ||
-        (profile as any)?.email?.toLowerCase().trim() ||
-        (profile as any)?.preferred_username?.toLowerCase().trim();
-
-      if (!email) return false;
-      if (!email.endsWith("@pfgbltd.com")) return false;
-
-      const dbUser = await prisma.user.findUnique({
-        where: { email },
-      });
-
-      return !!dbUser;
+    async signIn({ profile }) {
+      // only allow your company domain
+      if (!profile?.email?.endsWith("@pfgbltd.com")) {
+        return false;
+      }
+      return true;
     },
 
-    async jwt({ token }) {
-      const email = token.email?.toLowerCase().trim();
-
-      if (email) {
-        const dbUser = await prisma.user.findUnique({
-          where: { email },
-          select: {
-            id: true,
-            role: true,
-            name: true,
-            email: true,
-          },
-        });
-
-        if (dbUser) {
-          token.id = dbUser.id;
-          token.role = dbUser.role;
-          token.name = dbUser.name;
-          token.email = dbUser.email;
-        }
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = (user as any).id;
       }
-
       return token;
     },
 
     async session({ session, token }) {
       if (session.user) {
         (session.user as any).id = token.id;
-        (session.user as any).role = token.role;
-        session.user.name = token.name;
-        session.user.email = token.email ?? session.user.email;
       }
-
       return session;
     },
   },
