@@ -6,9 +6,13 @@ import { prisma } from "@/app/lib/prisma";
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
 
-  session: { strategy: "jwt" },
+  session: {
+    strategy: "jwt",
+  },
 
-  pages: { signIn: "/login" },
+  pages: {
+    signIn: "/login",
+  },
 
   providers: [
     MicrosoftEntraID({
@@ -20,10 +24,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
   callbacks: {
     async signIn({ profile }) {
-      // only allow your company domain
-      if (!profile?.email?.endsWith("@pfgbltd.com")) {
+      const email =
+        (profile as any)?.email ||
+        (profile as any)?.preferred_username ||
+        (profile as any)?.upn;
+
+      if (!email?.toLowerCase().endsWith("@pfgbltd.com")) {
         return false;
       }
+
       return true;
     },
 
@@ -31,6 +40,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user) {
         token.id = (user as any).id;
       }
+
       return token;
     },
 
@@ -38,6 +48,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (session.user) {
         (session.user as any).id = token.id;
       }
+
       return session;
     },
   },
