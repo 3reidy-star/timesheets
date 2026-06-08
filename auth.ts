@@ -19,6 +19,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID!,
       clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET!,
       issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER!,
+      allowDangerousEmailAccountLinking: true,
     }),
   ],
 
@@ -38,7 +39,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
     async jwt({ token, user }) {
       if (user) {
-        token.id = (user as any).id;
+        (token as any).id = (user as any).id;
       }
 
       return token;
@@ -46,7 +47,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
     async session({ session, token }) {
       if (session.user) {
-        (session.user as any).id = token.id;
+        (session.user as any).id = (token as any).id;
       }
 
       return session;
