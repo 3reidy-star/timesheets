@@ -15,6 +15,7 @@ model User {
   image         String?
 
   role          Role      @default(ENGINEER)
+  active        Boolean   @default(true)
 
   accounts      Account[]
 

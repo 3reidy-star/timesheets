@@ -36,7 +36,7 @@ export async function GET() {
     }
 
     const weeks = await prisma.timesheetWeek.findMany({
-      where: { status: "SUBMITTED" },
+      where: {},
       orderBy: { weekStart: "desc" },
       include: {
         user: { select: { id: true, name: true, email: true } },
