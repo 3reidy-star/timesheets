@@ -25,12 +25,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
   callbacks: {
     async signIn({ profile }) {
-      const email =
+      const email = (
         (profile as any)?.email ||
         (profile as any)?.preferred_username ||
-        (profile as any)?.upn;
+        (profile as any)?.upn ||
+        ""
+      ).toLowerCase();
 
-      if (!email?.toLowerCase().endsWith("@pfgbltd.com")) {
+      if (!email.endsWith("@pfgbltd.com")) {
+        return false;
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { active: true },
+      });
+
+      if (user && !user.active) {
         return false;
       }
 
