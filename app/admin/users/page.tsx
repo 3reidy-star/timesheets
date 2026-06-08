@@ -14,20 +14,21 @@ export default async function UserAdminPage() {
 
   const currentUser = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { id: true, role: true },
+    select: { id: true, role: true, active: true },
   });
 
-  if (!currentUser || currentUser.role !== "ADMIN") {
+  if (!currentUser || !currentUser.active || currentUser.role !== "ADMIN") {
     redirect("/timesheet");
   }
 
   const users = await prisma.user.findMany({
-    orderBy: [{ role: "asc" }, { name: "asc" }, { email: "asc" }],
+    orderBy: [{ active: "desc" }, { role: "asc" }, { name: "asc" }],
     select: {
       id: true,
       name: true,
       email: true,
       role: true,
+      active: true,
       createdAt: true,
       updatedAt: true,
     },
