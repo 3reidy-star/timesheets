@@ -9,6 +9,7 @@ type UserRow = {
   name: string | null;
   email: string | null;
   role: Role;
+  active: boolean;
   createdAt: Date | string;
   updatedAt: Date | string;
 };
@@ -24,7 +25,10 @@ export default function UserAdminPageClient({
   const [savingId, setSavingId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
 
-  async function updateRole(userId: string, role: Role) {
+  async function updateUser(
+    userId: string,
+    updates: Partial<Pick<UserRow, "role" | "active">>
+  ) {
     setSavingId(userId);
     setMessage("");
 
@@ -32,7 +36,7 @@ export default function UserAdminPageClient({
       const res = await fetch("/api/admin/users", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, role }),
+        body: JSON.stringify({ userId, ...updates }),
       });
 
       const data = await res.json();
@@ -42,10 +46,10 @@ export default function UserAdminPageClient({
       }
 
       setRows((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, role } : u))
+        prev.map((u) => (u.id === userId ? { ...u, ...data.user } : u))
       );
 
-      setMessage("User role updated.");
+      setMessage("User updated.");
     } catch (err: any) {
       setMessage(err?.message || "Something went wrong.");
     } finally {
@@ -58,7 +62,7 @@ export default function UserAdminPageClient({
       <div className="mb-6">
         <h1 className="text-2xl font-semibold">User Admin</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Manage who can enter timesheets, view approvals, and administer users.
+          Manage roles and deactivate users without deleting timesheet history.
         </p>
       </div>
 
@@ -75,13 +79,17 @@ export default function UserAdminPageClient({
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Email</th>
               <th className="px-4 py-3">Role</th>
+              <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Updated</th>
             </tr>
           </thead>
 
           <tbody className="divide-y divide-slate-100">
             {rows.map((user) => (
-              <tr key={user.id}>
+              <tr
+                key={user.id}
+                className={!user.active ? "bg-slate-50 text-slate-400" : ""}
+              >
                 <td className="px-4 py-3 font-medium">
                   {user.name || "Unnamed user"}
                   {user.id === currentUserId ? (
@@ -100,7 +108,7 @@ export default function UserAdminPageClient({
                     value={user.role}
                     disabled={savingId === user.id}
                     onChange={(e) =>
-                      updateRole(user.id, e.target.value as Role)
+                      updateUser(user.id, { role: e.target.value as Role })
                     }
                     className="rounded-lg border border-slate-300 px-3 py-2"
                   >
@@ -108,6 +116,21 @@ export default function UserAdminPageClient({
                     <option value="ACCOUNTS">Accounts</option>
                     <option value="ADMIN">Admin</option>
                   </select>
+                </td>
+
+                <td className="px-4 py-3">
+                  <button
+                    type="button"
+                    disabled={savingId === user.id || user.id === currentUserId}
+                    onClick={() => updateUser(user.id, { active: !user.active })}
+                    className={`rounded-lg px-3 py-2 font-semibold ${
+                      user.active
+                        ? "bg-green-100 text-green-700"
+                        : "bg-red-100 text-red-700"
+                    } disabled:opacity-50`}
+                  >
+                    {user.active ? "Active" : "Inactive"}
+                  </button>
                 </td>
 
                 <td className="px-4 py-3 text-slate-500">
