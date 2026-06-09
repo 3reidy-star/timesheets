@@ -472,14 +472,9 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <Link
-                    href={`/timesheet?weekStart=${encodeURIComponent(
-                      isoDate(new Date(detail.weekStart))
-                    )}`}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50"
-                  >
-                    View week grid
-                  </Link>
+                  <div className="rounded-xl bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-900 ring-1 ring-cyan-200">
+  Viewing: {detail.user.name?.trim() || detail.user.email || "Unnamed user"}
+</div>
 
                   <Link
                     href={`/approvals/audit?weekId=${encodeURIComponent(
