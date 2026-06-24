@@ -109,7 +109,9 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const [comment, setComment] = useState("");
-  const [acting, setActing] = useState<null | "APPROVE" | "REJECT">(null);
+  const [acting, setActing] = useState<null | "APPROVE" | "REJECT" | "DELETE">(
+    null
+  );
 
   const users = useMemo(() => {
     const map = new Map<string, string>();
@@ -210,8 +212,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
         throw new Error((data as any)?.error ?? "Failed to review week");
       }
 
-      const nextStatus =
-        action === "APPROVE" ? "APPROVED" : "DRAFT";
+      const nextStatus = action === "APPROVE" ? "APPROVED" : "DRAFT";
 
       setWeeks((prev) =>
         prev.map((week) =>
@@ -228,6 +229,46 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
       await loadDetail(selectedWeek.id);
     } catch (err: any) {
       setError(err?.message ?? "Failed to review week");
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function deleteWeek() {
+    if (!detail) return;
+
+    const who = detail.user.name?.trim() || detail.user.email || "Unnamed user";
+
+    const confirmed = window.confirm(
+      `Delete timesheet week for ${who}?\n\nWeek: ${weekRangeLabel(
+        detail.weekStart
+      )}\n\nThis cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setError(null);
+    setActing("DELETE");
+
+    try {
+      const response = await fetch(
+        `/api/admin/timesheets/${encodeURIComponent(detail.id)}/delete`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      const data = await readJsonOrText(response);
+
+      if (!response.ok) {
+        throw new Error((data as any)?.error ?? "Failed to delete week");
+      }
+
+      setWeeks((prev) => prev.filter((week) => week.id !== detail.id));
+      setDetail(null);
+      setSelectedId(null);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to delete week");
     } finally {
       setActing(null);
     }
@@ -473,8 +514,11 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
 
                 <div className="flex flex-wrap gap-2">
                   <div className="rounded-xl bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-900 ring-1 ring-cyan-200">
-  Viewing: {detail.user.name?.trim() || detail.user.email || "Unnamed user"}
-</div>
+                    Viewing:{" "}
+                    {detail.user.name?.trim() ||
+                      detail.user.email ||
+                      "Unnamed user"}
+                  </div>
 
                   <Link
                     href={`/approvals/audit?weekId=${encodeURIComponent(
@@ -484,6 +528,15 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                   >
                     Audit trail
                   </Link>
+
+                  <button
+                    type="button"
+                    onClick={deleteWeek}
+                    disabled={!!acting}
+                    className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50"
+                  >
+                    {acting === "DELETE" ? "Deleting…" : "Delete Week"}
+                  </button>
 
                   {detail.status === "SUBMITTED" ? (
                     <>
@@ -534,10 +587,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <Pill
-                  label="Raw total"
-                  value={fmt2(detail.totals.hours)}
-                />
+                <Pill label="Raw total" value={fmt2(detail.totals.hours)} />
                 <Pill
                   label="OT total"
                   value={fmt2(exceptionTotals.overtimeTotal)}
@@ -592,8 +642,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                       const dayPaid =
                         dayComputed?.paidHours ??
                         group.entries.reduce(
-                          (sum, entry) =>
-                            sum + (Number(entry.hours) || 0),
+                          (sum, entry) => sum + (Number(entry.hours) || 0),
                           0
                         );
 
