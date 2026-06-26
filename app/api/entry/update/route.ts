@@ -10,7 +10,7 @@ type EntryType = "WORK" | "HOLIDAY_FULL" | "HOLIDAY_HALF" | "SICK" | "TRAINING";
 
 function startOfWeekMonday(d: Date) {
   const date = new Date(d);
-  const day = date.getDay(); // 0 Sun .. 6 Sat
+  const day = date.getDay();
   const diff = (day === 0 ? -6 : 1) - day;
   date.setDate(date.getDate() + diff);
   date.setHours(0, 0, 0, 0);
@@ -58,13 +58,8 @@ function toBoolean(value: unknown) {
   return value === true || value === "true" || value === 1 || value === "1";
 }
 
-/**
- * Paid standard hours for non-work types.
- * Mon–Thu: 8.0 paid
- * Fri: 5.0 paid
- */
 function standardPaidHoursForDate(date: Date) {
-  const dow = date.getDay(); // 0 Sun .. 6 Sat
+  const dow = date.getDay();
   if (dow >= 1 && dow <= 4) return 8;
   if (dow === 5) return 5;
   return 0;
@@ -105,6 +100,7 @@ function calcWorkHours(
 ) {
   const startMin = parseHHMM(startTime);
   const finishMinRaw = parseHHMM(finishTime);
+
   if (startMin === null) throw new Error("Invalid startTime");
   if (finishMinRaw === null) throw new Error("Invalid finishTime");
 
@@ -133,6 +129,7 @@ function calcWorkHours(
   let otSunBhHours = 0;
 
   const dow = date.getDay();
+
   if (dow === 6) otSatHours = ot;
   else if (dow === 0) otSunBhHours = ot;
   else otMonFriHours = ot;
@@ -140,18 +137,10 @@ function calcWorkHours(
   return { hours, regularHours, otMonFriHours, otSatHours, otSunBhHours };
 }
 
-/**
- * JOB & KNOCK calculation.
- * - still a WORK entry
- * - requires a valid worked shift
- * - once valid, pays the full standard basic day for the selected date
- * - Mon–Thu = 8.0
- * - Fri = 5.0
- * - no overtime
- */
 function calcJobAndKnockHours(date: Date, startTime: string, finishTime: string) {
   const startMin = parseHHMM(startTime);
   const finishMinRaw = parseHHMM(finishTime);
+
   if (startMin === null) throw new Error("Invalid startTime");
   if (finishMinRaw === null) throw new Error("Invalid finishTime");
 
@@ -182,15 +171,22 @@ export async function POST(request: Request) {
 
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
+      select: {
+        id: true,
+        role: true,
+      },
     });
 
     if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 403 });
     }
 
+    const isAdminEditor = user.role === "ADMIN" || user.role === "ACCOUNTS";
+
     const body = await request.json();
 
     const id = toString(body?.id);
+
     if (!id) {
       return NextResponse.json({ error: "Missing entry id" }, { status: 400 });
     }
@@ -201,7 +197,12 @@ export async function POST(request: Request) {
         id: true,
         userId: true,
         weekId: true,
-        week: { select: { id: true, status: true } },
+        week: {
+          select: {
+            id: true,
+            status: true,
+          },
+        },
       },
     });
 
@@ -209,12 +210,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
 
-    if (existing.userId !== user.id) {
+    const isOwner = existing.userId === user.id;
+
+    if (!isOwner && !isAdminEditor) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
 
-    if (existing.week?.status !== "DRAFT") {
-      return NextResponse.json({ error: "Week is locked and cannot be edited" }, { status: 400 });
+    if (!isAdminEditor && existing.week?.status !== "DRAFT") {
+      return NextResponse.json(
+        { error: "Week is locked and cannot be edited" },
+        { status: 400 }
+      );
     }
 
     const type = (toString(body?.type) || "WORK").toUpperCase() as EntryType;
@@ -269,6 +275,7 @@ export async function POST(request: Request) {
 
         const half = (toString(body?.halfDay).toUpperCase() as "AM" | "PM" | "") || "AM";
         const times = halfDayTimesForDate(date, half === "PM" ? "PM" : "AM");
+
         startTime = times.start;
         finishTime = times.finish;
       } else {
@@ -276,6 +283,7 @@ export async function POST(request: Request) {
         regularHours = hours;
 
         const times = standardTimesForDate(date);
+
         startTime = times.start;
         finishTime = times.finish;
       }
@@ -286,16 +294,17 @@ export async function POST(request: Request) {
     }
 
     const newWeekStart = startOfWeekMonday(date);
+
     const targetWeek = await prisma.timesheetWeek.upsert({
       where: {
         userId_weekStart: {
-          userId: user.id,
+          userId: existing.userId,
           weekStart: newWeekStart,
         },
       },
       update: {},
       create: {
-        userId: user.id,
+        userId: existing.userId,
         weekStart: newWeekStart,
         status: "DRAFT",
       },
@@ -306,7 +315,7 @@ export async function POST(request: Request) {
       },
     });
 
-    if (targetWeek.status !== "DRAFT") {
+    if (!isAdminEditor && targetWeek.status !== "DRAFT") {
       return NextResponse.json(
         { error: "Target week is locked and cannot be edited" },
         { status: 400 }
@@ -342,6 +351,9 @@ export async function POST(request: Request) {
     });
   } catch (e: any) {
     console.error("api/entry/update POST error:", e);
-    return NextResponse.json({ error: e?.message ?? "Failed to update entry" }, { status: 500 });
+    return NextResponse.json(
+      { error: e?.message ?? "Failed to update entry" },
+      { status: 500 }
+    );
   }
 }

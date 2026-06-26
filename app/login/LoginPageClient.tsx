@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 
 export default function LoginPageClient() {
   const sp = useSearchParams();
-  const callbackUrl = sp.get("callbackUrl") || "/timesheet";
+  const callbackUrl = sp.get("callbackUrl") || "/post-login";
 
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center p-6">
