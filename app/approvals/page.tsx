@@ -267,35 +267,39 @@ export default function ApprovalsPage() {
   }, [selectedId]);
 
   async function review(action: "APPROVE" | "REJECT") {
-    if (!selected) return;
+  if (!detail) return;
 
-    setErr(null);
-    setActing(action);
-
-    try {
-      const r = await fetch("/api/week/review", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          weekId: selected.id,
-          action,
-          comment: comment.trim() || null,
-        }),
-      });
-
-      const data = await readJsonOrText(r);
-      if (!r.ok) throw new Error((data as any)?.error ?? "Failed to review week");
-
-      setComment("");
-      await loadQueue();
-      // if it was approved/rejected it'll disappear from queue; detail refresh harmless either way
-      await loadDetail(selected.id);
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed to review week");
-    } finally {
-      setActing(null);
-    }
+  if (detail.status !== "SUBMITTED") {
+    setErr(`Week is ${detail.status} and cannot be reviewed.`);
+    return;
   }
+
+  setErr(null);
+  setActing(action);
+
+  try {
+    const r = await fetch("/api/week/review", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        weekId: detail.id,
+        action,
+        comment: comment.trim() || null,
+      }),
+    });
+
+    const data = await readJsonOrText(r);
+    if (!r.ok) throw new Error((data as any)?.error ?? "Failed to review week");
+
+    setComment("");
+    setDetail(null);
+    await loadQueue();
+  } catch (e: any) {
+    setErr(e?.message ?? "Failed to review week");
+  } finally {
+    setActing(null);
+  }
+}
 
   const computed = useMemo<WeekComputed | null>(() => {
     if (!detail) return null;
