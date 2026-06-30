@@ -1,24 +1,10 @@
 export const runtime = "nodejs";
 
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 
-async function getOrCreateDevUser() {
-  const email = process.env.DEV_USER_EMAIL || "craig@test.com";
-  const name = process.env.DEV_USER_NAME || "Craig (Dev)";
-
-  const user =
-    (await prisma.user.findUnique({ where: { email } })) ??
-    (await prisma.user.create({
-      data: {
-        email,
-        name,
-        role: "ENGINEER",
-      },
-    }));
-
-  return user;
-}
+export const dynamic = "force-dynamic";
 
 function getString(v: unknown) {
   return typeof v === "string" ? v.trim() : "";
@@ -26,7 +12,20 @@ function getString(v: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const user = await getOrCreateDevUser();
+    const session = await auth();
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: { id: true, name: true, email: true, role: true },
+    });
+
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 403 });
+    }
 
     const body = await req.json().catch(() => ({}));
     const weekId = getString(body?.weekId);
@@ -35,7 +34,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "weekId is required" }, { status: 400 });
     }
 
-    // Ensure this week belongs to the current dev user
     const existing = await prisma.timesheetWeek.findFirst({
       where: { id: weekId, userId: user.id },
       select: { id: true, status: true },
@@ -45,71 +43,27 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Week not found" }, { status: 404 });
     }
 
-    // Idempotent: if already submitted/approved/rejected, just return the week
-    if (existing.status !== "DRAFT") {
-      const week = await prisma.timesheetWeek.findUnique({
-        where: { id: weekId },
-        include: {
-          entries: {
-            // ✅ removed project include (job is already on entry)
-            orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-          },
-          audits: {
-            orderBy: { createdAt: "asc" },
-            include: {
-              performedBy: { select: { id: true, name: true, email: true } },
-            },
-          },
-        },
-      });
-
-      return NextResponse.json({ ok: true, week });
-    }
-
-    // Submit + audit in one transaction
     const week = await prisma.$transaction(async (tx) => {
-      // (Optional) Ensure it still belongs to user in-transaction
-      const wk = await tx.timesheetWeek.findFirst({
-        where: { id: weekId, userId: user.id },
-        select: { id: true, status: true },
-      });
-      if (!wk) throw new Error("Week not found");
-      if (wk.status !== "DRAFT") {
-        return tx.timesheetWeek.findUnique({
+      if (existing.status === "DRAFT") {
+        await tx.timesheetWeek.update({
           where: { id: weekId },
-          include: {
-            entries: {
-              orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-            },
-            audits: {
-              orderBy: { createdAt: "asc" },
-              include: {
-                performedBy: { select: { id: true, name: true, email: true } },
-              },
-            },
+          data: { status: "SUBMITTED" },
+        });
+
+        await tx.weekAudit.create({
+          data: {
+            weekId,
+            action: "SUBMITTED" as any,
+            comment: null,
+            performedById: user.id,
           },
         });
       }
-
-      await tx.timesheetWeek.update({
-        where: { id: weekId },
-        data: { status: "SUBMITTED" },
-      });
-
-      await tx.weekAudit.create({
-        data: {
-          weekId,
-          action: "SUBMITTED" as any,
-          comment: null,
-          performedById: user.id,
-        },
-      });
 
       return tx.timesheetWeek.findUnique({
         where: { id: weekId },
         include: {
           entries: {
-            // ✅ removed project include
             orderBy: [{ date: "asc" }, { createdAt: "asc" }],
           },
           audits: {
