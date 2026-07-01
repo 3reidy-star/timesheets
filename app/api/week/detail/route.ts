@@ -144,9 +144,7 @@ function computePaidAndBreak(entries: any[]) {
       const paidHours = round2(regularHours + overtimeHours);
 
       const breakHours =
-        workingHours >= BREAK_THRESHOLD_HOURS && workingHours > paidHours
-          ? BREAK_HOURS
-          : 0;
+  workingHours >= BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
 
       return {
         date,
