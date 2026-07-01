@@ -325,7 +325,8 @@ export default function TimesheetEntryEditPageClient() {
   const sp = useSearchParams();
 
   const entryId = String(params?.id ?? "");
-  const qsWeekStart = sp.get("weekStart");
+ const qsWeekStart = sp.get("weekStart");
+const adminMode = sp.get("admin") === "1";
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -349,6 +350,7 @@ export default function TimesheetEntryEditPageClient() {
   const isWork = type === "WORK";
   const isHalfHoliday = type === "HOLIDAY_HALF";
   const isDraft = entryWeek?.status === "DRAFT";
+const canEdit = isDraft || adminMode;
 
   async function loadEntry() {
     if (!entryId) {
@@ -484,12 +486,18 @@ export default function TimesheetEntryEditPageClient() {
     !!dateIso &&
     isLikelyEarlyFinish(dateIso, finishTime);
 
-  const canSave = !!entryWeek && isDraft && !!dateIso && preview.ok && (!isWork || !!job.trim()) && !saving;
+ const canSave =
+  !!entryWeek &&
+  canEdit &&
+  !!dateIso &&
+  preview.ok &&
+  (!isWork || !!job.trim()) &&
+  !saving;
 
   async function saveChanges() {
     if (!entryWeek) return;
 
-    if (!isDraft) {
+    if (!canEdit) {
       setErr("Week is locked and cannot be modified.");
       return;
     }
@@ -538,7 +546,13 @@ export default function TimesheetEntryEditPageClient() {
         ? String((data as any).weekStart).slice(0, 10)
         : entryWeek.weekStart;
 
-      router.push(`/timesheet?weekStart=${encodeURIComponent(nextWeekStart)}`);
+      if (adminMode) {
+  router.push("/admin/timesheets");
+} else {
+  router.push(`/timesheet?weekStart=${encodeURIComponent(nextWeekStart)}`);
+}
+
+router.refresh();
       router.refresh();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to update entry");
