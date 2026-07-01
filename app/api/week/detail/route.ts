@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
@@ -6,6 +7,15 @@ import { prisma } from "@/app/lib/prisma";
 
 function getString(v: unknown) {
   return typeof v === "string" ? v.trim() : "";
+}
+
+function toNumber(value: unknown) {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") return Number(value) || 0;
+  if (value && typeof value === "object" && "toNumber" in value) {
+    return (value as { toNumber: () => number }).toNumber();
+  }
+  return 0;
 }
 
 const WORKING_TYPES = new Set(["WORK", "TRAINING"]);
@@ -69,11 +79,11 @@ export async function GET(req: Request) {
     const entries = week.entries ?? [];
 
     const totals = {
-      hours: round2(entries.reduce((s, e) => s + (Number((e as any).hours) || 0), 0)),
-      regular: round2(entries.reduce((s, e) => s + (Number((e as any).regularHours) || 0), 0)),
-      otMonFri: round2(entries.reduce((s, e) => s + (Number((e as any).otMonFriHours) || 0), 0)),
-      otSat: round2(entries.reduce((s, e) => s + (Number((e as any).otSatHours) || 0), 0)),
-      otSunBh: round2(entries.reduce((s, e) => s + (Number((e as any).otSunBhHours) || 0), 0)),
+      hours: round2(entries.reduce((s, e) => s + toNumber(e.hours), 0)),
+      regular: round2(entries.reduce((s, e) => s + toNumber(e.regularHours), 0)),
+      otMonFri: round2(entries.reduce((s, e) => s + toNumber(e.otMonFriHours), 0)),
+      otSat: round2(entries.reduce((s, e) => s + toNumber(e.otSatHours), 0)),
+      otSunBh: round2(entries.reduce((s, e) => s + toNumber(e.otSunBhHours), 0)),
     };
 
     const computed = computePaidAndBreak(entries);
@@ -92,6 +102,7 @@ export async function GET(req: Request) {
       },
     });
   } catch (err: any) {
+    console.error("api/week/detail error:", err);
     return NextResponse.json(
       { error: err?.message ?? "Failed to load week detail" },
       { status: 500 }
@@ -99,53 +110,57 @@ export async function GET(req: Request) {
   }
 }
 
-/**
- * Break rule:
- * - For each day: if workingHours (WORK + TRAINING) >= 8, deduct 0.5 unpaid break once.
- * - Travel is included in working hours per your rule; in your schema travel is just WORK hours.
- */
 function computePaidAndBreak(entries: any[]) {
   const byDay = new Map<string, any[]>();
 
-  for (const e of entries) {
-    const k = dayKeyUTC(e.date);
-    byDay.set(k, [...(byDay.get(k) ?? []), e]);
+  for (const entry of entries) {
+    const key = dayKeyUTC(entry.date);
+    const existing = byDay.get(key) ?? [];
+    existing.push(entry);
+    byDay.set(key, existing);
   }
 
   const days = [...byDay.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, dayEntries]) => {
       const workingHours = dayEntries
-  .filter((x) => WORKING_TYPES.has(String(x.type)))
-  .reduce((s, x) => s + (Number(x.hours) || 0), 0);
+        .filter((entry) => WORKING_TYPES.has(String(entry.type)))
+        .reduce((sum, entry) => sum + toNumber(entry.hours), 0);
 
-const paidHours = dayEntries.reduce(
-  (s, x) => s + (Number(x.regularHours) || 0),
-  0
-);
+      const regularHours = dayEntries.reduce(
+        (sum, entry) => sum + toNumber(entry.regularHours),
+        0
+      );
 
-const breakHours = Math.max(0, round2(workingHours - paidHours));
+      const overtimeHours = dayEntries.reduce(
+        (sum, entry) =>
+          sum +
+          toNumber(entry.otMonFriHours) +
+          toNumber(entry.otSatHours) +
+          toNumber(entry.otSunBhHours),
+        0
+      );
 
-return {
-  date,
-  workingHours: round2(workingHours),
-  breakHours: round2(breakHours),
-  paidHours: round2(paidHours),
-};
+      const paidHours = round2(regularHours + overtimeHours);
+
+      const breakHours =
+        workingHours >= BREAK_THRESHOLD_HOURS && workingHours > paidHours
+          ? BREAK_HOURS
+          : 0;
 
       return {
         date,
         workingHours: round2(workingHours),
         breakHours: round2(breakHours),
-        paidHours: round2(paidHours),
+        paidHours,
       };
     });
 
   const totals = days.reduce(
-    (acc, d) => {
-      acc.workingHours += d.workingHours;
-      acc.breakHours += d.breakHours;
-      acc.paidHours += d.paidHours;
+    (acc, day) => {
+      acc.workingHours += day.workingHours;
+      acc.breakHours += day.breakHours;
+      acc.paidHours += day.paidHours;
       return acc;
     },
     { workingHours: 0, breakHours: 0, paidHours: 0 }
