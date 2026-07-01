@@ -19,8 +19,6 @@ function toNumber(value: unknown) {
 }
 
 const WORKING_TYPES = new Set(["WORK", "TRAINING"]);
-const BREAK_THRESHOLD_HOURS = 8;
-const BREAK_HOURS = 0.5;
 
 export async function GET(req: Request) {
   try {
@@ -32,10 +30,7 @@ export async function GET(req: Request) {
 
     const user = await prisma.user.findUnique({
       where: { email: session.user.email },
-      select: {
-        id: true,
-        role: true,
-      },
+      select: { id: true, role: true },
     });
 
     if (!user) {
@@ -125,7 +120,10 @@ function computePaidAndBreak(entries: any[]) {
     .map(([date, dayEntries]) => {
       const workingHours = dayEntries
         .filter((entry) => WORKING_TYPES.has(String(entry.type)))
-        .reduce((sum, entry) => sum + toNumber(entry.hours), 0);
+        .reduce((sum, entry) => {
+          const gross = grossHoursFromTimes(entry.startTime, entry.finishTime);
+          return sum + (gross ?? toNumber(entry.hours));
+        }, 0);
 
       const regularHours = dayEntries.reduce(
         (sum, entry) => sum + toNumber(entry.regularHours),
@@ -142,14 +140,12 @@ function computePaidAndBreak(entries: any[]) {
       );
 
       const paidHours = round2(regularHours + overtimeHours);
-
-      const breakHours =
-  workingHours >= BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
+      const breakHours = round2(Math.max(0, workingHours - paidHours));
 
       return {
         date,
         workingHours: round2(workingHours),
-        breakHours: round2(breakHours),
+        breakHours,
         paidHours,
       };
     });
@@ -173,11 +169,36 @@ function computePaidAndBreak(entries: any[]) {
     },
     rules: {
       workingTypes: Array.from(WORKING_TYPES),
-      breakThresholdHours: BREAK_THRESHOLD_HOURS,
-      breakHours: BREAK_HOURS,
       unpaid: true,
     },
   };
+}
+
+function grossHoursFromTimes(startTime: unknown, finishTime: unknown) {
+  const start = parseTime(getString(startTime));
+  const finishRaw = parseTime(getString(finishTime));
+
+  if (start === null || finishRaw === null) return null;
+
+  let finish = finishRaw;
+  if (finish < start) finish += 24 * 60;
+
+  const minutes = finish - start;
+  if (minutes <= 0) return null;
+
+  return minutes / 60;
+}
+
+function parseTime(value: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+
+  return hours * 60 + minutes;
 }
 
 function dayKeyUTC(d: Date | string) {
