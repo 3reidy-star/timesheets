@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { redirect } from "next/navigation";
+import TopNav from "@/app/components/TopNav";
 import AdminTimesheetsPageClient, {
   type AdminTimesheetWeekSummary,
 } from "./AdminTimesheetsPageClient";
@@ -112,5 +113,10 @@ export default async function AdminTimesheetsPage() {
     };
   });
 
-  return <AdminTimesheetsPageClient initialWeeks={formattedWeeks} />;
+  return (
+    <>
+      <TopNav />
+      <AdminTimesheetsPageClient initialWeeks={formattedWeeks} />
+    </>
+  );
 }

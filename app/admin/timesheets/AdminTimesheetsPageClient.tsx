@@ -728,6 +728,17 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                                     </div>
 
                                     <div className="text-right">
+                                      <Link
+                                        href={`/timesheet/entry/${encodeURIComponent(
+                                          entry.id
+                                        )}?admin=1&adminWeekId=${encodeURIComponent(
+                                          detail.id
+                                        )}`}
+                                        className="mb-2 inline-flex rounded-md bg-cyan-600 px-3 py-1 text-xs font-semibold text-white hover:bg-cyan-700"
+                                      >
+                                        ✏ Edit
+                                      </Link>
+
                                       <div className="text-sm font-semibold text-slate-900">
                                         {fmt2(entry.hours)}h
                                       </div>
