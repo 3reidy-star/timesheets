@@ -116,11 +116,22 @@ function computePaidAndBreak(entries: any[]) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, dayEntries]) => {
       const workingHours = dayEntries
-        .filter((x) => WORKING_TYPES.has(String(x.type)))
-        .reduce((s, x) => s + (Number(x.hours) || 0), 0);
+  .filter((x) => WORKING_TYPES.has(String(x.type)))
+  .reduce((s, x) => s + (Number(x.hours) || 0), 0);
 
-      const breakHours = workingHours >= BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
-      const paidHours = Math.max(0, workingHours - breakHours);
+const paidHours = dayEntries.reduce(
+  (s, x) => s + (Number(x.regularHours) || 0),
+  0
+);
+
+const breakHours = Math.max(0, round2(workingHours - paidHours));
+
+return {
+  date,
+  workingHours: round2(workingHours),
+  breakHours: round2(breakHours),
+  paidHours: round2(paidHours),
+};
 
       return {
         date,
