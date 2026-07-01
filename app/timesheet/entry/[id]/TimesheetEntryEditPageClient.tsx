@@ -594,10 +594,10 @@ router.refresh();
     );
   }
 
-  if (!isDraft) {
-    return (
-      <InputCard>
-        <h1 className="text-xl font-semibold text-slate-900">Week locked</h1>
+  if (!canEdit) {
+  return (
+    <InputCard>
+      <h1 className="text-xl font-semibold text-slate-900">Week locked</h1>
         <p className="mt-2 text-sm text-slate-600">
           This week is <span className="font-semibold">{entryWeek.status}</span> and can’t be edited.
         </p>
