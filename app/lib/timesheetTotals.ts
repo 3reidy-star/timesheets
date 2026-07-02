@@ -60,14 +60,14 @@ function isPaidNonWorkingType(type: string) {
 }
 
 function corePaidHoursForDate(date: Date) {
-  const dow = date.getDay();
+  const dow = date.getUTCDay();
   if (dow >= 1 && dow <= 4) return 8;
   if (dow === 5) return 5;
   return 0;
 }
 
 function coreWindowForDate(date: Date) {
-  const dow = date.getDay();
+  const dow = date.getUTCDay();
 
   if (dow >= 1 && dow <= 4) {
     return { start: 8 * 60 + 30, end: 17 * 60 };
@@ -86,7 +86,7 @@ function computeEntryWeekdayOT(entry: TimesheetEntryForTotals) {
   if (entry.jobAndKnock) return 0;
 
   const date = new Date(entry.date);
-  const dow = date.getDay();
+  const dow = date.getUTCDay();
 
   if (dow === 0 || dow === 6) return 0;
 
@@ -128,33 +128,33 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([dateIso, list]) => {
       const date = new Date(list[0].date);
-      const dow = date.getDay();
+      const dow = date.getUTCDay();
 
       const workingEntries = list.filter((entry) => isWorkingType(entry.type));
       const paidNonWorkingEntries = list.filter((entry) =>
-        isPaidNonWorkingType(entry.type)
+        isPaidNonWorkingType(entry.type),
       );
 
       const workedHours = round2(
         workingEntries.reduce(
           (sum, entry) => sum + (Number(entry.hours) || 0),
-          0
-        )
+          0,
+        ),
       );
 
       const paidNonWorkingHours = round2(
         paidNonWorkingEntries.reduce(
           (sum, entry) => sum + (Number(entry.hours) || 0),
-          0
-        )
+          0,
+        ),
       );
 
       const hasLeftEarlyWorking = workingEntries.some(
-        (entry) => !!entry.leftEarlyByChoice
+        (entry) => !!entry.leftEarlyByChoice,
       );
 
       const hasJobAndKnockWorking = workingEntries.some(
-        (entry) => !!entry.jobAndKnock
+        (entry) => !!entry.jobAndKnock,
       );
 
       let breakHours = 0;
@@ -168,8 +168,8 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
         regularHours = round2(
           list.reduce(
             (sum, entry) => sum + (Number(entry.regularHours) || 0),
-            0
-          ) + paidNonWorkingHours
+            0,
+          ) + paidNonWorkingHours,
         );
 
         corePaidHours = regularHours;
@@ -177,22 +177,22 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
         otMonFriHours = round2(
           list.reduce(
             (sum, entry) => sum + (Number(entry.otMonFriHours) || 0),
-            0
-          )
+            0,
+          ),
         );
 
         otSatHours = round2(
           list.reduce(
             (sum, entry) => sum + (Number(entry.otSatHours) || 0),
-            0
-          )
+            0,
+          ),
         );
 
         otSunBhHours = round2(
           list.reduce(
             (sum, entry) => sum + (Number(entry.otSunBhHours) || 0),
-            0
-          )
+            0,
+          ),
         );
       } else if (dow >= 1 && dow <= 5) {
         if (workingEntries.length > 0) {
@@ -202,8 +202,8 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
           otMonFriHours = round2(
             workingEntries.reduce(
               (sum, entry) => sum + computeEntryWeekdayOT(entry),
-              0
-            )
+              0,
+            ),
           );
 
           breakHours = workedHours >= BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
@@ -218,8 +218,8 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
         otSatHours = round2(
           workingEntries.reduce(
             (sum, entry) => sum + (Number(entry.hours) || 0),
-            0
-          )
+            0,
+          ),
         );
       } else if (dow === 0) {
         regularHours = paidNonWorkingHours;
@@ -228,17 +228,17 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
         otSunBhHours = round2(
           workingEntries.reduce(
             (sum, entry) => sum + (Number(entry.hours) || 0),
-            0
-          )
+            0,
+          ),
         );
       }
 
       const paidHours = round2(
-        regularHours + otMonFriHours + otSatHours + otSunBhHours
+        regularHours + otMonFriHours + otSatHours + otSunBhHours,
       );
 
       const overnightCount = list.filter((entry) =>
-        Boolean(entry.overnight)
+        Boolean(entry.overnight),
       ).length;
 
       return {
@@ -285,7 +285,7 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
       overtimeTotal: 0,
       overnightCount: 0,
       overnightAllowance: 0,
-    }
+    },
   );
 
   const hasAnyLeftEarlyByChoice = days.some((day) => day.leftEarlyByChoice);
@@ -304,7 +304,7 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
       overtimeTotal: round2(totals.overtimeTotal),
       businessTopUpHours: round2(businessTopUpHours),
       paidHours: round2(
-        totals.regularHours + totals.overtimeTotal + businessTopUpHours
+        totals.regularHours + totals.overtimeTotal + businessTopUpHours,
       ),
       overnightCount: totals.overnightCount,
       overnightAllowance: round2(totals.overnightAllowance),
