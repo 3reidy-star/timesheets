@@ -655,23 +655,23 @@ const breakLabel = computed?.rules?.unpaidBreakHours
                     <div className="text-sm text-slate-600">No entries.</div>
                   ) : (
                     groupedByDay.map((group) => {
-                      const dayComputed =
-                        computed?.days?.find(
-                          (day) => day.date === group.dayIso,
-                        ) ??
-                        computeFallback(group.entries).days?.find(
-                          (day) => day.date === group.dayIso,
-                        );
+  const dayComputed =
+    computed?.days?.find((day) => day.date === group.dayIso) ??
+    computeFallback(group.entries).days?.find(
+      (day) => day.date === group.dayIso,
+    );
 
-                      const dayPaid =
-                        dayComputed?.paidHours ??
-                        group.entries.reduce(
-                          (sum, entry) => sum + (Number(entry.hours) || 0),
-                          0,
-                        );
+  const dayWorked =
+    dayComputed?.workedHours ?? dayComputed?.workingHours ?? 0;
 
-                      const dayWorked = dayComputed?.workingHours ?? 0;
-                      const dayBreak = dayComputed?.breakHours ?? 0;
+  const dayPaid =
+    dayComputed?.paidHours ??
+    group.entries.reduce(
+      (sum, entry) => sum + (Number(entry.hours) || 0),
+      0,
+    );
+
+  const dayBreak = dayComputed?.breakHours ?? 0;
 
                       return (
                         <div
