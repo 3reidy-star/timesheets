@@ -56,9 +56,15 @@ function dayKeyUTC(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
+const PAID_NON_WORKING_TYPES = new Set(["HOLIDAY_FULL", "HOLIDAY_HALF", "SICK"]);
+
 function isWorkingType(type: string) {
   const t = (type || "WORK").toUpperCase();
   return t === "WORK" || t === "TRAINING";
+}
+
+function isPaidNonWorkingType(type: string) {
+  return PAID_NON_WORKING_TYPES.has((type || "").toUpperCase());
 }
 
 function corePaidHoursForDate(d: Date) {
@@ -123,7 +129,13 @@ function computeWeek(entries: EntryLike[]) {
       const dow = date.getDay();
 
       const workingEntries = list.filter((e) => isWorkingType(e.type));
-      const hasLeftEarlyWorking = workingEntries.some((e) => !!e.leftEarlyByChoice);
+const paidNonWorkingEntries = list.filter((e) => isPaidNonWorkingType(e.type));
+
+const paidNonWorkingHours = round2(
+  paidNonWorkingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
+);
+
+const hasLeftEarlyWorking = workingEntries.some((e) => !!e.leftEarlyByChoice);
       const hasJobAndKnockWorking = workingEntries.some((e) => !!e.jobAndKnock);
 
       const workedHours = round2(
@@ -156,8 +168,13 @@ function computeWeek(entries: EntryLike[]) {
         breakHours = 0;
       } else {
         if (dow >= 1 && dow <= 5) {
-          corePaidHours = corePaidHoursForDate(date);
-          regularHours = corePaidHours;
+  if (workingEntries.length > 0) {
+    corePaidHours = corePaidHoursForDate(date);
+    regularHours = corePaidHours;
+  } else {
+    corePaidHours = paidNonWorkingHours;
+    regularHours = paidNonWorkingHours;
+  }
 
           otMonFriHours = round2(
             list.reduce((sum, e) => {
@@ -168,15 +185,15 @@ function computeWeek(entries: EntryLike[]) {
 
           breakHours = workingEntries.length > 0 ? 0.5 : 0;
         } else if (dow === 6) {
-          regularHours = 0;
-          corePaidHours = 0;
+          regularHours = paidNonWorkingHours;
+corePaidHours = paidNonWorkingHours;
           otSatHours = round2(
             workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
           );
           breakHours = 0;
         } else if (dow === 0) {
-          regularHours = 0;
-          corePaidHours = 0;
+    regularHours = paidNonWorkingHours;
+    corePaidHours = paidNonWorkingHours;
           otSunBhHours = round2(
             workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
           );
