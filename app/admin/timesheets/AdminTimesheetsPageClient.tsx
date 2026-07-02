@@ -139,9 +139,10 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const [comment, setComment] = useState("");
-  const [acting, setActing] = useState<null | "APPROVE" | "REJECT" | "DELETE">(
-    null,
-  );
+  const [acting, setActing] = useState<
+    null | "APPROVE" | "REJECT" | "DELETE" | "ENTRY_DELETE"
+  >(null);
+  const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
 
   const users = useMemo(() => {
     const map = new Map<string, string>();
@@ -303,6 +304,54 @@ setDetail({
     } catch (err: any) {
       setError(err?.message ?? "Failed to delete week");
     } finally {
+      setActing(null);
+    }
+  }
+
+  async function deleteEntry(entry: Entry) {
+    if (!detail) return;
+
+    const confirmed = window.confirm(
+      `Delete this timesheet entry?\n\n${entryTypeLabel(entry.type)} ${entry.startTime || "-"}-${
+        entry.finishTime || "-"
+      }\n${jobLabel(entry.job, entry.type)}\n\nThis cannot be undone. The deletion will be recorded in the audit history.`,
+    );
+
+    if (!confirmed) return;
+
+    setError(null);
+    setActing("ENTRY_DELETE");
+    setDeletingEntryId(entry.id);
+
+    try {
+      const response = await fetch("/api/entry/delete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: entry.id }),
+      });
+
+      const data = await readJsonOrText(response);
+
+      if (!response.ok) {
+        throw new Error((data as any)?.error ?? "Failed to delete entry");
+      }
+
+      const weekSummary = (data as any)?.weekSummary as
+        | AdminTimesheetWeekSummary
+        | null
+        | undefined;
+
+      if (weekSummary) {
+        setWeeks((prev) =>
+          prev.map((week) => (week.id === weekSummary.id ? weekSummary : week)),
+        );
+      }
+
+      await loadDetail(detail.id);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to delete entry");
+    } finally {
+      setDeletingEntryId(null);
       setActing(null);
     }
   }
@@ -750,16 +799,29 @@ const breakLabel = computed?.rules?.unpaidBreakHours
                                     </div>
 
                                     <div className="text-right">
-                                      <Link
-                                        href={`/timesheet/entry/${encodeURIComponent(
-                                          entry.id,
-                                        )}?admin=1&adminWeekId=${encodeURIComponent(
-                                          detail.id,
-                                        )}`}
-                                        className="mb-2 inline-flex rounded-md bg-cyan-600 px-3 py-1 text-xs font-semibold text-white hover:bg-cyan-700"
-                                      >
-                                        ✏ Edit
-                                      </Link>
+                                      <div className="mb-2 flex justify-end gap-2">
+                                        <Link
+                                          href={`/timesheet/entry/${encodeURIComponent(
+                                            entry.id,
+                                          )}?admin=1&adminWeekId=${encodeURIComponent(
+                                            detail.id,
+                                          )}`}
+                                          className="inline-flex rounded-md bg-cyan-600 px-3 py-1 text-xs font-semibold text-white hover:bg-cyan-700"
+                                        >
+                                          ✏ Edit
+                                        </Link>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => deleteEntry(entry)}
+                                          disabled={!!acting}
+                                          className="inline-flex rounded-md bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-50"
+                                        >
+                                          {deletingEntryId === entry.id
+                                            ? "Deleting…"
+                                            : "Delete Entry"}
+                                        </button>
+                                      </div>
 
                                       <div className="text-sm font-semibold text-slate-900">
                                         {fmt2(entry.hours)}h
