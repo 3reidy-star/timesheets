@@ -3,27 +3,9 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 
 export const dynamic = "force-dynamic";
-
-type EntryLike = {
-  id: string;
-  date: Date;
-  type: string;
-  hours: number;
-  regularHours: number;
-  otMonFriHours: number;
-  otSatHours: number;
-  otSunBhHours: number;
-  overnight: boolean;
-  leftEarlyByChoice?: boolean;
-  jobAndKnock?: boolean;
-  startTime?: string | null;
-  finishTime?: string | null;
-};
-
-const WORKING_TYPES = new Set(["WORK", "TRAINING"]);
-const PAID_NON_WORKING_TYPES = new Set(["HOLIDAY_FULL", "HOLIDAY_HALF", "SICK"]);
 
 function getString(v: unknown) {
   return typeof v === "string" ? v.trim() : "";
@@ -38,276 +20,6 @@ function startOfWeekMonday(d: Date) {
   return date;
 }
 
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
-}
-
-function parseHHMM(value?: string | null) {
-  if (!value) return null;
-  const m = /^(\d{2}):(\d{2})$/.exec(value);
-  if (!m) return null;
-
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
-
-  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-  return hh * 60 + mm;
-}
-
-function dayKeyUTC(d: Date) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function isWorkingType(type: string) {
-  return WORKING_TYPES.has((type || "WORK").toUpperCase());
-}
-
-function isPaidNonWorkingType(type: string) {
-  return PAID_NON_WORKING_TYPES.has((type || "").toUpperCase());
-}
-
-function corePaidHoursForDate(d: Date) {
-  const dow = d.getDay();
-  if (dow >= 1 && dow <= 4) return 8;
-  if (dow === 5) return 5;
-  return 0;
-}
-
-function coreWindowForDate(d: Date) {
-  const dow = d.getDay();
-
-  if (dow >= 1 && dow <= 4) {
-    return { start: 8 * 60 + 30, end: 17 * 60 };
-  }
-
-  if (dow === 5) {
-    return { start: 8 * 60 + 30, end: 14 * 60 };
-  }
-
-  return null;
-}
-
-function computeEntryWeekdayOT(entry: EntryLike) {
-  if (!isWorkingType(entry.type)) return 0;
-  if (entry.leftEarlyByChoice) return 0;
-  if (entry.jobAndKnock) return 0;
-
-  const date = new Date(entry.date);
-  const dow = date.getDay();
-
-  if (dow === 0 || dow === 6) return 0;
-
-  const window = coreWindowForDate(date);
-  if (!window) return 0;
-
-  const startMin = parseHHMM(entry.startTime);
-  const finishMinRaw = parseHHMM(entry.finishTime);
-
-  if (startMin === null || finishMinRaw === null) return 0;
-
-  let finishMin = finishMinRaw;
-  if (finishMin < startMin) finishMin += 24 * 60;
-
-  let otMin = 0;
-
-  if (startMin < window.start) {
-    otMin += Math.max(0, Math.min(finishMin, window.start) - startMin);
-  }
-
-  if (finishMin > window.end) {
-    otMin += Math.max(0, finishMin - Math.max(startMin, window.end));
-  }
-
-  return round2(otMin / 60);
-}
-
-function computeWeek(entries: EntryLike[]) {
-  const byDay = new Map<string, EntryLike[]>();
-
-  for (const e of entries) {
-    const key = dayKeyUTC(new Date(e.date));
-    byDay.set(key, [...(byDay.get(key) ?? []), e]);
-  }
-
-  const days = [...byDay.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([dateIso, list]) => {
-      const date = new Date(list[0].date);
-      const dow = date.getDay();
-
-      const workingEntries = list.filter((e) => isWorkingType(e.type));
-      const paidNonWorkingEntries = list.filter((e) => isPaidNonWorkingType(e.type));
-
-      const hasLeftEarlyWorking = workingEntries.some((e) => !!e.leftEarlyByChoice);
-      const hasJobAndKnockWorking = workingEntries.some((e) => !!e.jobAndKnock);
-
-      const workedHours = round2(
-        workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
-      );
-
-      const paidNonWorkingHours = round2(
-        paidNonWorkingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
-      );
-
-      let regularHours = 0;
-      let corePaidHours = 0;
-      let otMonFriHours = 0;
-      let otSatHours = 0;
-      let otSunBhHours = 0;
-      let breakHours = 0;
-
-      if (hasLeftEarlyWorking || hasJobAndKnockWorking) {
-        regularHours = round2(
-          list.reduce((sum, e) => sum + (Number(e.regularHours) || 0), 0)
-        );
-
-        corePaidHours = regularHours;
-
-        otMonFriHours = round2(
-          list.reduce((sum, e) => sum + (Number(e.otMonFriHours) || 0), 0)
-        );
-
-        otSatHours = round2(
-          list.reduce((sum, e) => sum + (Number(e.otSatHours) || 0), 0)
-        );
-
-        otSunBhHours = round2(
-          list.reduce((sum, e) => sum + (Number(e.otSunBhHours) || 0), 0)
-        );
-
-        regularHours = round2(regularHours + paidNonWorkingHours);
-        corePaidHours = regularHours;
-        breakHours = 0;
-      } else {
-        if (dow >= 1 && dow <= 5) {
-          if (workingEntries.length > 0) {
-            corePaidHours = corePaidHoursForDate(date);
-            regularHours = corePaidHours;
-
-            otMonFriHours = round2(
-              list.reduce((sum, e) => {
-                if (!isWorkingType(e.type)) return sum;
-                return sum + computeEntryWeekdayOT(e);
-              }, 0)
-            );
-
-            breakHours = 0.5;
-          } else {
-            regularHours = paidNonWorkingHours;
-            corePaidHours = paidNonWorkingHours;
-            breakHours = 0;
-          }
-        } else if (dow === 6) {
-          regularHours = paidNonWorkingHours;
-          corePaidHours = paidNonWorkingHours;
-
-          otSatHours = round2(
-            workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
-          );
-
-          breakHours = 0;
-        } else if (dow === 0) {
-          regularHours = paidNonWorkingHours;
-          corePaidHours = paidNonWorkingHours;
-
-          otSunBhHours = round2(
-            workingEntries.reduce((sum, e) => sum + (Number(e.hours) || 0), 0)
-          );
-
-          breakHours = 0;
-        }
-      }
-
-      const paidHours = round2(
-        regularHours + otMonFriHours + otSatHours + otSunBhHours
-      );
-
-      const overnightCount = list.reduce((acc, e) => acc + (e.overnight ? 1 : 0), 0);
-
-      return {
-        date: dateIso,
-        workedHours,
-        breakHours,
-        corePaidHours: round2(corePaidHours),
-        paidHours,
-        regularHours: round2(regularHours),
-        otMonFriHours: round2(otMonFriHours),
-        otSatHours: round2(otSatHours),
-        otSunBhHours: round2(otSunBhHours),
-        overnightCount,
-        overnightAllowance: overnightCount * 35,
-        leftEarlyByChoice: hasLeftEarlyWorking,
-      };
-    });
-
-  const totals = days.reduce(
-    (acc, d) => {
-      acc.workedHours += d.workedHours;
-      acc.breakHours += d.breakHours;
-      acc.corePaidHours += d.corePaidHours;
-      acc.regularHours += d.regularHours;
-      acc.otMonFriHours += d.otMonFriHours;
-      acc.otSatHours += d.otSatHours;
-      acc.otSunBhHours += d.otSunBhHours;
-      acc.overnightCount += d.overnightCount;
-      acc.overnightAllowance += d.overnightAllowance;
-      return acc;
-    },
-    {
-      workedHours: 0,
-      breakHours: 0,
-      corePaidHours: 0,
-      regularHours: 0,
-      otMonFriHours: 0,
-      otSatHours: 0,
-      otSunBhHours: 0,
-      overnightCount: 0,
-      overnightAllowance: 0,
-    }
-  );
-
-  const businessTopUpHours = 0.5;
-
-  const overtimeTotal = round2(
-    totals.otMonFriHours + totals.otSatHours + totals.otSunBhHours
-  );
-
-  const paidHours = round2(totals.regularHours + businessTopUpHours + overtimeTotal);
-
-  return {
-    days,
-    totals: {
-      workedHours: round2(totals.workedHours),
-      breakHours: round2(totals.breakHours),
-      corePaidHours: round2(totals.corePaidHours),
-      businessTopUpHours: round2(businessTopUpHours),
-      paidHours,
-      regularHours: round2(totals.regularHours),
-      otMonFriHours: round2(totals.otMonFriHours),
-      otSatHours: round2(totals.otSatHours),
-      otSunBhHours: round2(totals.otSunBhHours),
-      overtimeTotal,
-      overnightCount: totals.overnightCount,
-      overnightAllowance: round2(totals.overnightAllowance),
-      hasAnyLeftEarlyByChoice: false,
-    },
-    rules: {
-      weeklyCorePaidHours: 37,
-      businessTopUpHours: round2(businessTopUpHours),
-      monThu: { coreWindow: "08:30-17:00", corePaidHours: 8 },
-      fri: { coreWindow: "08:30-14:00", corePaidHours: 5 },
-      unpaidBreakHours: 0.5,
-      workingTypes: ["WORK", "TRAINING"],
-      paidNonWorkingTypes: ["HOLIDAY_FULL", "HOLIDAY_HALF", "SICK"],
-      leftEarlyByChoice:
-        "Pay stored regular hours plus stored overtime. Weekly business top-up still applies.",
-    },
-  };
-}
-
 export async function GET(req: Request) {
   try {
     const session = await auth();
@@ -316,64 +28,119 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
+    const currentUser = await prisma.user.findUnique({
       where: { email: session.user.email },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+      },
     });
 
-    if (!user) {
+    if (!currentUser) {
       return NextResponse.json({ error: "User not found" }, { status: 403 });
     }
 
     const url = new URL(req.url);
+    const weekId = getString(url.searchParams.get("weekId"));
     const weekStartParam = getString(url.searchParams.get("weekStart"));
 
-    const requested =
-      weekStartParam && !Number.isNaN(new Date(weekStartParam).getTime())
-        ? new Date(`${weekStartParam}T00:00:00`)
-        : null;
+    let existing;
 
-    const weekStart = requested ? startOfWeekMonday(requested) : startOfWeekMonday(new Date());
+    if (weekId) {
+      if (currentUser.role !== "ADMIN" && currentUser.role !== "ACCOUNTS") {
+        return NextResponse.json({ error: "Not authorised" }, { status: 403 });
+      }
 
-    let existing = await prisma.timesheetWeek.findUnique({
-      where: {
-        userId_weekStart: {
-          userId: user.id,
-          weekStart,
-        },
-      },
-      include: {
-        entries: {
-          orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-        },
-      },
-    });
-
-    if (!existing) {
-      existing = await prisma.timesheetWeek.create({
-        data: {
-          userId: user.id,
-          weekStart,
-          status: "DRAFT",
-        },
+      existing = await prisma.timesheetWeek.findUnique({
+        where: { id: weekId },
         include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
           entries: {
             orderBy: [{ date: "asc" }, { createdAt: "asc" }],
           },
         },
       });
+
+      if (!existing) {
+        return NextResponse.json({ error: "Week not found" }, { status: 404 });
+      }
+    } else {
+      const requested =
+        weekStartParam && !Number.isNaN(new Date(weekStartParam).getTime())
+          ? new Date(`${weekStartParam}T00:00:00`)
+          : null;
+
+      const weekStart = requested
+        ? startOfWeekMonday(requested)
+        : startOfWeekMonday(new Date());
+
+      existing = await prisma.timesheetWeek.findUnique({
+        where: {
+          userId_weekStart: {
+            userId: currentUser.id,
+            weekStart,
+          },
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+          entries: {
+            orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+          },
+        },
+      });
+
+      if (!existing) {
+        existing = await prisma.timesheetWeek.create({
+          data: {
+            userId: currentUser.id,
+            weekStart,
+            status: "DRAFT",
+          },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+            entries: {
+              orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+            },
+          },
+        });
+      }
     }
 
-    const computed = computeWeek(existing.entries as EntryLike[]);
+    const computed = calcWeekTotals(existing.entries);
 
     return NextResponse.json({
       week: existing,
       computed,
-      user: { id: user.id, name: user.name ?? null, email: user.email },
+      user: existing.user ?? {
+        id: currentUser.id,
+        name: currentUser.name ?? null,
+        email: currentUser.email,
+      },
     });
   } catch (e: any) {
-    console.error("api/week GET error:", e);
+    console.error("api/week/detail GET error:", e);
     return NextResponse.json(
-      { error: e?.message ?? "Failed to load week" },
+      { error: e?.message ?? "Failed to load week detail" },
       { status: 500 }
     );
   }
