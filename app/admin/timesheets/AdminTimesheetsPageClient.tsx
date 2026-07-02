@@ -301,10 +301,16 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
     }
   }
 
-  const computed = useMemo<WeekComputed | null>(() => {
-    if (!detail) return null;
-    return detail.computed ?? computeFallback(detail.entries ?? []);
-  }, [detail]);
+ const computed = useMemo<WeekComputed | null>(() => {
+  if (!detail) return null;
+
+  // Always use the API calculation. Only fall back if nothing was returned.
+  if (detail.computed) {
+    return detail.computed;
+  }
+
+  return computeFallback(detail.entries ?? []);
+}, [detail]);
 
   const safeTotals = useMemo(() => getDetailTotals(detail), [detail]);
 
@@ -592,7 +598,9 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                 <Pill label="Status" value={detail.status} />
                 <Pill
                   label="Worked"
-                  value={fmt2(computed?.totals.workingHours)}
+                  value={fmt2(
+  computed?.totals.workedHours ?? computed?.totals.workingHours
+)}
                 />
                 <Pill
                   label="Unpaid break"
