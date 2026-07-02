@@ -106,10 +106,10 @@ export default async function AdminTimesheetsPage() {
       overtimeHours,
       overnightCount,
       user: {
-        id: week.user.id,
-        name: week.user.name,
-        email: week.user.email,
-      },
+        id: week.user?.id ?? "",
+  name: week.user?.name ?? null,
+  email: week.user?.email ?? "Unknown user",
+},
     };
   });
 
