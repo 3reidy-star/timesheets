@@ -15,7 +15,7 @@ export type AdminTimesheetWeekSummary = {
     id?: string | null;
     name?: string | null;
     email?: string | null;
-  } | null;
+  };
 };
 
 type Entry = {
@@ -49,14 +49,12 @@ type Audit = {
 type WeekComputed = {
   days: {
     date: string;
-    workingHours?: number;
-    workedHours?: number;
+    workingHours: number;
     breakHours: number;
     paidHours: number;
   }[];
   totals: {
-    workingHours?: number;
-    workedHours?: number;
+    workingHours: number;
     breakHours: number;
     paidHours: number;
   };
@@ -76,15 +74,15 @@ type WeekDetail = {
     id?: string | null;
     name?: string | null;
     email?: string | null;
-  } | null;
+  };
   entries: Entry[];
   audits?: Audit[];
-  totals: {
-    hours: number;
-    regular: number;
-    otMonFri: number;
-    otSat: number;
-    otSunBh: number;
+  totals?: {
+    hours?: number;
+    regular?: number;
+    otMonFri?: number;
+    otSat?: number;
+    otSunBh?: number;
   };
   computed?: WeekComputed;
 };
@@ -97,25 +95,30 @@ const WORKING_TYPES = new Set(["WORK", "TRAINING"]);
 const BREAK_THRESHOLD_HOURS = 8;
 const BREAK_HOURS = 0.5;
 
-function getUserLabel(user?: { name?: string | null; email?: string | null } | null) {
+function getUserLabel(user?: { name?: string | null; email?: string | null }) {
   return user?.name?.trim() || user?.email || "Unknown user";
 }
 
-function getUserId(user?: { id?: string | null } | null) {
+function getUserId(user?: { id?: string | null }) {
   return user?.id || "unknown";
 }
 
-function computedWorkingHours(value?: { workingHours?: number; workedHours?: number } | null) {
-  return Number(value?.workingHours ?? value?.workedHours ?? 0);
+function getDetailTotals(detail: WeekDetail | null) {
+  return {
+    hours: Number(detail?.totals?.hours) || 0,
+    regular: Number(detail?.totals?.regular) || 0,
+    otMonFri: Number(detail?.totals?.otMonFri) || 0,
+    otSat: Number(detail?.totals?.otSat) || 0,
+    otSunBh: Number(detail?.totals?.otSunBh) || 0,
+  };
 }
 
 export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
-  const [weeks, setWeeks] =
-    useState<AdminTimesheetWeekSummary[]>(initialWeeks);
+  const [weeks, setWeeks] = useState<AdminTimesheetWeekSummary[]>(initialWeeks);
   const [selectedUser, setSelectedUser] = useState("ALL");
   const [selectedStatus, setSelectedStatus] = useState("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(
-    initialWeeks[0]?.id ?? null
+    initialWeeks[0]?.id ?? null,
   );
 
   const [detailLoading, setDetailLoading] = useState(false);
@@ -124,7 +127,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
 
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<null | "APPROVE" | "REJECT" | "DELETE">(
-    null
+    null,
   );
 
   const users = useMemo(() => {
@@ -182,7 +185,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
     try {
       const response = await fetch(
         `/api/week/detail?weekId=${encodeURIComponent(weekId)}`,
-        { cache: "no-store" }
+        { cache: "no-store" },
       );
 
       const data = await readJsonOrText(response);
@@ -191,15 +194,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
         throw new Error((data as any)?.error ?? "Failed to load week detail");
       }
 
-      const payload = data as any;
-      const week = payload.week ?? {};
-      const fallbackWeek = weeks.find((w) => w.id === weekId) ?? null;
-
-      setDetail({
-        ...week,
-        user: week.user ?? payload.user ?? fallbackWeek?.user ?? null,
-        computed: week.computed ?? payload.computed,
-      } as WeekDetail);
+      setDetail((data as any).week as WeekDetail);
     } catch (err: any) {
       setDetail(null);
       setError(err?.message ?? "Failed to load week detail");
@@ -240,8 +235,8 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                 ...week,
                 status: nextStatus,
               }
-            : week
-        )
+            : week,
+        ),
       );
 
       setComment("");
@@ -260,8 +255,8 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
 
     const confirmed = window.confirm(
       `Delete timesheet week for ${who}?\n\nWeek: ${weekRangeLabel(
-        detail.weekStart
-      )}\n\nThis cannot be undone.`
+        detail.weekStart,
+      )}\n\nThis cannot be undone.`,
     );
 
     if (!confirmed) return;
@@ -274,7 +269,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
         `/api/admin/timesheets/${encodeURIComponent(detail.id)}/delete`,
         {
           method: "DELETE",
-        }
+        },
       );
 
       const data = await readJsonOrText(response);
@@ -298,6 +293,8 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
     return detail.computed ?? computeFallback(detail.entries ?? []);
   }, [detail]);
 
+  const safeTotals = useMemo(() => getDetailTotals(detail), [detail]);
+
   const groupedByDay = useMemo(() => {
     const entries = detail?.entries ?? [];
     const map = new Map<string, Entry[]>();
@@ -314,8 +311,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
         entries: (map.get(key) ?? [])
           .slice()
           .sort(
-            (a, b) =>
-              new Date(a.date).getTime() - new Date(b.date).getTime()
+            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
           ),
       }));
   }, [detail]);
@@ -329,11 +325,11 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
         (Number(entry.otMonFriHours) || 0) +
         (Number(entry.otSatHours) || 0) +
         (Number(entry.otSunBhHours) || 0),
-      0
+      0,
     );
 
     const overnightCount = entries.filter((entry) =>
-      Boolean(entry.overnight)
+      Boolean(entry.overnight),
     ).length;
 
     return {
@@ -440,9 +436,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
             <div className="text-sm font-semibold text-slate-900">
               Timesheet weeks
             </div>
-            <div className="text-xs text-slate-500">
-              {weeks.length} loaded
-            </div>
+            <div className="text-xs text-slate-500">{weeks.length} loaded</div>
           </div>
 
           <div className="mt-4 max-h-[720px] space-y-3 overflow-auto pr-1">
@@ -532,13 +526,12 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
 
                 <div className="flex flex-wrap gap-2">
                   <div className="rounded-xl bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-900 ring-1 ring-cyan-200">
-                    Viewing:{" "}
-                    {getUserLabel(detail.user)}
+                    Viewing: {getUserLabel(detail.user)}
                   </div>
 
                   <Link
                     href={`/approvals/audit?weekId=${encodeURIComponent(
-                      detail.id
+                      detail.id,
                     )}`}
                     className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50"
                   >
@@ -586,7 +579,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                 <Pill label="Status" value={detail.status} />
                 <Pill
                   label="Worked"
-                  value={fmt2(computedWorkingHours(computed?.totals))}
+                  value={fmt2(computed?.totals.workingHours)}
                 />
                 <Pill
                   label="Unpaid break"
@@ -596,14 +589,14 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-4">
-                <Pill label="Regular" value={fmt2(detail.totals.regular)} />
-                <Pill label="OT Mon–Fri" value={fmt2(detail.totals.otMonFri)} />
-                <Pill label="OT Sat" value={fmt2(detail.totals.otSat)} />
-                <Pill label="OT Sun/BH" value={fmt2(detail.totals.otSunBh)} />
+                <Pill label="Regular" value={fmt2(safeTotals.regular)} />
+                <Pill label="OT Mon–Fri" value={fmt2(safeTotals.otMonFri)} />
+                <Pill label="OT Sat" value={fmt2(safeTotals.otSat)} />
+                <Pill label="OT Sun/BH" value={fmt2(safeTotals.otSunBh)} />
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <Pill label="Raw total" value={fmt2(detail.totals.hours)} />
+                <Pill label="Raw total" value={fmt2(safeTotals.hours)} />
                 <Pill
                   label="OT total"
                   value={fmt2(exceptionTotals.overtimeTotal)}
@@ -649,20 +642,20 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                     groupedByDay.map((group) => {
                       const dayComputed =
                         computed?.days?.find(
-                          (day) => day.date === group.dayIso
+                          (day) => day.date === group.dayIso,
                         ) ??
                         computeFallback(group.entries).days?.find(
-                          (day) => day.date === group.dayIso
+                          (day) => day.date === group.dayIso,
                         );
 
                       const dayPaid =
                         dayComputed?.paidHours ??
                         group.entries.reduce(
                           (sum, entry) => sum + (Number(entry.hours) || 0),
-                          0
+                          0,
                         );
 
-                      const dayWorked = computedWorkingHours(dayComputed);
+                      const dayWorked = dayComputed?.workingHours ?? 0;
                       const dayBreak = dayComputed?.breakHours ?? 0;
 
                       return (
@@ -680,9 +673,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                               </div>
                               <div className="text-[11px] text-slate-600">
                                 Worked {fmt2(dayWorked)}h
-                                {dayBreak
-                                  ? ` • Break ${fmt2(dayBreak)}h`
-                                  : ""}
+                                {dayBreak ? ` • Break ${fmt2(dayBreak)}h` : ""}
                               </div>
                             </div>
                           </div>
@@ -746,9 +737,9 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                                     <div className="text-right">
                                       <Link
                                         href={`/timesheet/entry/${encodeURIComponent(
-                                          entry.id
+                                          entry.id,
                                         )}?admin=1&adminWeekId=${encodeURIComponent(
-                                          detail.id
+                                          detail.id,
                                         )}`}
                                         className="mb-2 inline-flex rounded-md bg-cyan-600 px-3 py-1 text-xs font-semibold text-white hover:bg-cyan-700"
                                       >
@@ -790,7 +781,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                                         </span>{" "}
                                         {fmt2(
                                           (Number(entry.otSatHours) || 0) +
-                                            (Number(entry.otSunBhHours) || 0)
+                                            (Number(entry.otSunBhHours) || 0),
                                         )}
                                       </div>
                                     </div>
@@ -998,9 +989,7 @@ function jobLabel(job: string, type?: string) {
 
   if (raw) return raw;
 
-  return (type || "WORK").toUpperCase() !== "WORK"
-    ? "(Non-work)"
-    : "(No job)";
+  return (type || "WORK").toUpperCase() !== "WORK" ? "(Non-work)" : "(No job)";
 }
 
 function isWorkingType(type?: string) {
@@ -1025,11 +1014,7 @@ function computeFallback(entries: Entry[]): WeekComputed {
       const breakHours =
         workingHours >= BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
 
-      const nonWorkingPaidHours = list
-        .filter((entry) => !isWorkingType(entry.type))
-        .reduce((sum, entry) => sum + (Number(entry.hours) || 0), 0);
-
-      const paidHours = Math.max(0, workingHours - breakHours) + nonWorkingPaidHours;
+      const paidHours = Math.max(0, workingHours - breakHours);
 
       return {
         date,
@@ -1050,7 +1035,7 @@ function computeFallback(entries: Entry[]): WeekComputed {
       workingHours: 0,
       breakHours: 0,
       paidHours: 0,
-    }
+    },
   );
 
   return {
