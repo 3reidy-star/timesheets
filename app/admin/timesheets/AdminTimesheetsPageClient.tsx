@@ -11,11 +11,11 @@ export type AdminTimesheetWeekSummary = {
   regularHours: number;
   overtimeHours: number;
   overnightCount: number;
-  user: {
-    id: string;
-    name: string | null;
-    email: string | null;
-  };
+  user?: {
+    id?: string | null;
+    name?: string | null;
+    email?: string | null;
+  } | null;
 };
 
 type Entry = {
@@ -49,12 +49,14 @@ type Audit = {
 type WeekComputed = {
   days: {
     date: string;
-    workingHours: number;
+    workingHours?: number;
+    workedHours?: number;
     breakHours: number;
     paidHours: number;
   }[];
   totals: {
-    workingHours: number;
+    workingHours?: number;
+    workedHours?: number;
     breakHours: number;
     paidHours: number;
   };
@@ -70,11 +72,11 @@ type WeekDetail = {
   id: string;
   weekStart: string;
   status: string;
-  user: {
-    id: string;
-    name: string | null;
-    email: string | null;
-  };
+  user?: {
+    id?: string | null;
+    name?: string | null;
+    email?: string | null;
+  } | null;
   entries: Entry[];
   audits?: Audit[];
   totals: {
@@ -94,6 +96,18 @@ type Props = {
 const WORKING_TYPES = new Set(["WORK", "TRAINING"]);
 const BREAK_THRESHOLD_HOURS = 8;
 const BREAK_HOURS = 0.5;
+
+function getUserLabel(user?: { name?: string | null; email?: string | null } | null) {
+  return user?.name?.trim() || user?.email || "Unknown user";
+}
+
+function getUserId(user?: { id?: string | null } | null) {
+  return user?.id || "unknown";
+}
+
+function computedWorkingHours(value?: { workingHours?: number; workedHours?: number } | null) {
+  return Number(value?.workingHours ?? value?.workedHours ?? 0);
+}
 
 export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
   const [weeks, setWeeks] =
@@ -117,10 +131,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
     const map = new Map<string, string>();
 
     for (const week of weeks) {
-      map.set(
-        week.user.id,
-        week.user.name?.trim() || week.user.email || "Unnamed user"
-      );
+      map.set(getUserId(week.user), getUserLabel(week.user));
     }
 
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
@@ -128,7 +139,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
 
   const filteredWeeks = useMemo(() => {
     return weeks.filter((week) => {
-      if (selectedUser !== "ALL" && week.user.id !== selectedUser) {
+      if (selectedUser !== "ALL" && getUserId(week.user) !== selectedUser) {
         return false;
       }
 
@@ -180,7 +191,15 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
         throw new Error((data as any)?.error ?? "Failed to load week detail");
       }
 
-      setDetail((data as any).week as WeekDetail);
+      const payload = data as any;
+      const week = payload.week ?? {};
+      const fallbackWeek = weeks.find((w) => w.id === weekId) ?? null;
+
+      setDetail({
+        ...week,
+        user: week.user ?? payload.user ?? fallbackWeek?.user ?? null,
+        computed: week.computed ?? payload.computed,
+      } as WeekDetail);
     } catch (err: any) {
       setDetail(null);
       setError(err?.message ?? "Failed to load week detail");
@@ -237,7 +256,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
   async function deleteWeek() {
     if (!detail) return;
 
-    const who = detail.user.name?.trim() || detail.user.email || "Unnamed user";
+    const who = getUserLabel(detail.user);
 
     const confirmed = window.confirm(
       `Delete timesheet week for ${who}?\n\nWeek: ${weekRangeLabel(
@@ -434,8 +453,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
             ) : (
               filteredWeeks.map((week) => {
                 const active = week.id === selectedId;
-                const who =
-                  week.user.name?.trim() || week.user.email || "Unnamed user";
+                const who = getUserLabel(week.user);
 
                 return (
                   <button
@@ -499,7 +517,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <div className="text-sm font-semibold text-slate-900">
-                    {detail.user.name?.trim() || detail.user.email}
+                    {getUserLabel(detail.user)}
                   </div>
                   <div className="mt-1 text-xs text-slate-600">
                     Week: {weekRangeLabel(detail.weekStart)}
@@ -515,9 +533,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                 <div className="flex flex-wrap gap-2">
                   <div className="rounded-xl bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-900 ring-1 ring-cyan-200">
                     Viewing:{" "}
-                    {detail.user.name?.trim() ||
-                      detail.user.email ||
-                      "Unnamed user"}
+                    {getUserLabel(detail.user)}
                   </div>
 
                   <Link
@@ -570,7 +586,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                 <Pill label="Status" value={detail.status} />
                 <Pill
                   label="Worked"
-                  value={fmt2(computed?.totals.workingHours)}
+                  value={fmt2(computedWorkingHours(computed?.totals))}
                 />
                 <Pill
                   label="Unpaid break"
@@ -646,7 +662,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                           0
                         );
 
-                      const dayWorked = dayComputed?.workingHours ?? 0;
+                      const dayWorked = computedWorkingHours(dayComputed);
                       const dayBreak = dayComputed?.breakHours ?? 0;
 
                       return (
@@ -1009,7 +1025,11 @@ function computeFallback(entries: Entry[]): WeekComputed {
       const breakHours =
         workingHours >= BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
 
-      const paidHours = Math.max(0, workingHours - breakHours);
+      const nonWorkingPaidHours = list
+        .filter((entry) => !isWorkingType(entry.type))
+        .reduce((sum, entry) => sum + (Number(entry.hours) || 0), 0);
+
+      const paidHours = Math.max(0, workingHours - breakHours) + nonWorkingPaidHours;
 
       return {
         date,
