@@ -206,7 +206,7 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
             ),
           );
 
-          breakHours = workedHours >= BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
+          breakHours = workingEntries.length > 0 ? BREAK_HOURS : 0;
         } else {
           regularHours = paidNonWorkingHours;
           corePaidHours = paidNonWorkingHours;
