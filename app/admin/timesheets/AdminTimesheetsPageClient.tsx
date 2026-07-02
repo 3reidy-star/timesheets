@@ -312,54 +312,41 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
   return computeFallback(detail.entries ?? []);
 }, [detail]);
 
-  const safeTotals = useMemo(() => getDetailTotals(detail), [detail]);
+  const safeTotals = useMemo(() => {
+  const totals = computed?.totals;
+
+  return {
+    hours: Number(totals?.workedHours ?? totals?.workingHours) || 0,
+    regular: Number(totals?.regularHours) || 0,
+    otMonFri: Number(totals?.otMonFriHours) || 0,
+    otSat: Number(totals?.otSatHours) || 0,
+    otSunBh: Number(totals?.otSunBhHours) || 0,
+    paid: Number(totals?.paidHours) || 0,
+    overtimeTotal: Number(totals?.overtimeTotal) || 0,
+    overnightCount: Number(totals?.overnightCount) || 0,
+  };
+}, [computed]);
 
   const groupedByDay = useMemo(() => {
-    const entries = detail?.entries ?? [];
-    const map = new Map<string, Entry[]>();
+  const entries = detail?.entries ?? [];
+  const map = new Map<string, Entry[]>();
 
-    for (const entry of entries) {
-      const key = isoDate(new Date(entry.date));
-      map.set(key, [...(map.get(key) ?? []), entry]);
-    }
+  for (const entry of entries) {
+    const key = isoDate(new Date(entry.date));
+    map.set(key, [...(map.get(key) ?? []), entry]);
+  }
 
-    return Array.from(map.keys())
-      .sort()
-      .map((key) => ({
-        dayIso: key,
-        entries: (map.get(key) ?? [])
-          .slice()
-          .sort(
-            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-          ),
-      }));
-  }, [detail]);
+  return Array.from(map.keys())
+    .sort()
+    .map((key) => ({
+      dayIso: key,
+      entries: (map.get(key) ?? []).slice(),
+    }));
+}, [detail]);
 
-  const exceptionTotals = useMemo(() => {
-    const entries = detail?.entries ?? [];
-
-    const overtimeTotal = entries.reduce(
-      (sum, entry) =>
-        sum +
-        (Number(entry.otMonFriHours) || 0) +
-        (Number(entry.otSatHours) || 0) +
-        (Number(entry.otSunBhHours) || 0),
-      0,
-    );
-
-    const overnightCount = entries.filter((entry) =>
-      Boolean(entry.overnight),
-    ).length;
-
-    return {
-      overtimeTotal: round2(overtimeTotal),
-      overnightCount,
-    };
-  }, [detail]);
-
-  const breakLabel = computed?.rules?.breakThresholdHours
-    ? `0.5h deducted when daily working ≥ ${computed.rules.breakThresholdHours}h`
-    : "0.5h deducted when daily working ≥ 8h";
+const breakLabel = computed?.rules?.unpaidBreakHours
+  ? "0.5h deducted when daily working ≥ 8h"
+  : "0.5h deducted when daily working ≥ 8h";
 
   return (
     <div className="space-y-6">
@@ -606,7 +593,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
                   label="Unpaid break"
                   value={fmt2(computed?.totals.breakHours)}
                 />
-                <Pill label="Paid" value={fmt2(computed?.totals.paidHours)} />
+                <Pill label="Paid" value={fmt2(safeTotals.paid)} />
               </div>
 
               <div className="grid gap-3 sm:grid-cols-4">
@@ -619,14 +606,15 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
               <div className="grid gap-3 sm:grid-cols-3">
                 <Pill label="Raw total" value={fmt2(safeTotals.hours)} />
                 <Pill
-                  label="OT total"
-                  value={fmt2(exceptionTotals.overtimeTotal)}
-                />
+  label="OT total"
+  value={fmt2(safeTotals.overtimeTotal)}
+/>
                 <Pill
-                  label="Overnights"
-                  value={exceptionTotals.overnightCount || "0"}
-                />
-              </div>
+  label="Overnights"
+  value={safeTotals.overnightCount || "0"}
+/>
+
+</div>
 
               {detail.status === "SUBMITTED" ? (
                 <div>
