@@ -49,19 +49,37 @@ type Audit = {
 type WeekComputed = {
   days: {
     date: string;
-    workingHours: number;
+    workedHours?: number;
+    workingHours?: number;
     breakHours: number;
     paidHours: number;
+    regularHours?: number;
+    otMonFriHours?: number;
+    otSatHours?: number;
+    otSunBhHours?: number;
+    overtimeTotal?: number;
+    overnightCount?: number;
   }[];
   totals: {
-    workingHours: number;
-    breakHours: number;
-    paidHours: number;
+    workedHours?: number;
+    workingHours?: number;
+    breakHours?: number;
+    paidHours?: number;
+    regularHours?: number;
+    otMonFriHours?: number;
+    otSatHours?: number;
+    otSunBhHours?: number;
+    overtimeTotal?: number;
+    overnightCount?: number;
+    overnightAllowance?: number;
+    businessTopUpHours?: number;
   };
   rules?: {
     workingTypes?: string[];
+    paidNonWorkingTypes?: string[];
     breakThresholdHours?: number;
     breakHours?: number;
+    unpaidBreakHours?: number;
     unpaid?: boolean;
   };
 };
@@ -77,13 +95,6 @@ type WeekDetail = {
   };
   entries: Entry[];
   audits?: Audit[];
-  totals?: {
-    hours?: number;
-    regular?: number;
-    otMonFri?: number;
-    otSat?: number;
-    otSunBh?: number;
-  };
   computed?: WeekComputed;
 };
 
@@ -104,12 +115,14 @@ function getUserId(user?: { id?: string | null }) {
 }
 
 function getDetailTotals(detail: WeekDetail | null) {
+  const totals = detail?.computed?.totals;
+
   return {
-    hours: Number(detail?.totals?.hours) || 0,
-    regular: Number(detail?.totals?.regular) || 0,
-    otMonFri: Number(detail?.totals?.otMonFri) || 0,
-    otSat: Number(detail?.totals?.otSat) || 0,
-    otSunBh: Number(detail?.totals?.otSunBh) || 0,
+    hours: Number(totals?.workedHours ?? totals?.workingHours) || 0,
+    regular: Number(totals?.regularHours) || 0,
+    otMonFri: Number(totals?.otMonFriHours) || 0,
+    otSat: Number(totals?.otSatHours) || 0,
+    otSunBh: Number(totals?.otSunBhHours) || 0,
   };
 }
 
