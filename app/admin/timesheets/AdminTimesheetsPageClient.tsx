@@ -207,7 +207,13 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
         throw new Error((data as any)?.error ?? "Failed to load week detail");
       }
 
-      setDetail((data as any).week as WeekDetail);
+      const payload = data as any;
+
+setDetail({
+  ...(payload.week as WeekDetail),
+  computed: payload.computed,
+  user: payload.user ?? payload.week?.user,
+});
     } catch (err: any) {
       setDetail(null);
       setError(err?.message ?? "Failed to load week detail");
