@@ -14,24 +14,6 @@ function toIso(value: Date | string) {
   return value instanceof Date ? value.toISOString() : value;
 }
 
-function entrySummary(entry: {
-  date: Date;
-  type: string;
-  job: string | null;
-  startTime: string | null;
-  finishTime: string | null;
-  hours: unknown;
-}) {
-  const date = toIso(entry.date).slice(0, 10);
-  const type = entry.type || "WORK";
-  const start = entry.startTime || "-";
-  const finish = entry.finishTime || "-";
-  const job = entry.job?.trim() || "(No job)";
-  const hours = Number(entry.hours) || 0;
-
-  return `${date} ${type} ${start}-${finish} ${job} (${hours.toFixed(2)}h)`;
-}
-
 export async function POST(request: Request) {
   try {
     const session = await auth();
@@ -44,8 +26,6 @@ export async function POST(request: Request) {
       where: { email: session.user.email },
       select: {
         id: true,
-        email: true,
-        name: true,
         role: true,
         active: true,
       },
@@ -81,39 +61,32 @@ export async function POST(request: Request) {
     }
 
     const isAdmin =
-      currentUser.role === "ADMIN" || currentUser.role === "ACCOUNTS";
+      currentUser.role === "ADMIN" ||
+      currentUser.role === "ACCOUNTS";
 
     const isOwner = entry.week.userId === currentUser.id;
 
     if (!isAdmin) {
       if (!isOwner) {
-        return NextResponse.json({ error: "Not authorised" }, { status: 403 });
+        return NextResponse.json(
+          { error: "Not authorised" },
+          { status: 403 }
+        );
       }
 
       if (entry.week.status !== "DRAFT") {
         return NextResponse.json(
           { error: "Week is locked and cannot be edited" },
-          { status: 400 },
+          { status: 400 }
         );
       }
     }
 
     const weekId = entry.week.id;
-    const deletedSummary = entrySummary(entry);
 
-    await prisma.$transaction(async (tx) => {
-      await tx.timesheetEntry.delete({
-        where: { id },
-      });
-
-      await tx.weekAudit.create({
-        data: {
-          weekId,
-          action: "UPDATED" as any,
-          comment: `Deleted entry: ${deletedSummary}`,
-          performedById: currentUser.id,
-        },
-      });
+    // Delete the entry only
+    await prisma.timesheetEntry.delete({
+      where: { id },
     });
 
     const updatedWeek = await prisma.timesheetWeek.findUnique({
@@ -127,12 +100,17 @@ export async function POST(request: Request) {
           },
         },
         entries: {
-          orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+          orderBy: [
+            { date: "asc" },
+            { createdAt: "asc" },
+          ],
         },
       },
     });
 
-    const computed = updatedWeek ? calcWeekTotals(updatedWeek.entries) : null;
+    const computed = updatedWeek
+      ? calcWeekTotals(updatedWeek.entries)
+      : null;
 
     return NextResponse.json({
       ok: true,
@@ -161,8 +139,14 @@ export async function POST(request: Request) {
     console.error("api/entry/delete POST error:", e);
 
     return NextResponse.json(
-      { error: e?.message ?? "Failed to delete entry" },
-      { status: 500 },
+      {
+        error: e?.message ?? "Failed to delete entry",
+        stack:
+          process.env.NODE_ENV !== "production"
+            ? e?.stack
+            : undefined,
+      },
+      { status: 500 }
     );
   }
 }
