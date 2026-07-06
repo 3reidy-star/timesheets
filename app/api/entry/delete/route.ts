@@ -20,7 +20,7 @@ function entrySummary(entry: {
   job: string | null;
   startTime: string | null;
   finishTime: string | null;
-  hours: any;
+  hours: unknown;
 }) {
   const date = toIso(entry.date).slice(0, 10);
   const type = entry.type || "WORK";
@@ -80,7 +80,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
 
-    const isAdmin = currentUser.role === "ADMIN" || currentUser.role === "ACCOUNTS";
+    const isAdmin =
+      currentUser.role === "ADMIN" || currentUser.role === "ACCOUNTS";
+
     const isOwner = entry.week.userId === currentUser.id;
 
     if (!isAdmin) {
@@ -100,12 +102,14 @@ export async function POST(request: Request) {
     const deletedSummary = entrySummary(entry);
 
     await prisma.$transaction(async (tx) => {
-      await tx.timesheetEntry.delete({ where: { id } });
+      await tx.timesheetEntry.delete({
+        where: { id },
+      });
 
       await tx.weekAudit.create({
         data: {
           weekId,
-          action: "ENTRY_DELETED" as any,
+          action: "UPDATED" as any,
           comment: `Deleted entry: ${deletedSummary}`,
           performedById: currentUser.id,
         },
@@ -155,6 +159,7 @@ export async function POST(request: Request) {
     });
   } catch (e: any) {
     console.error("api/entry/delete POST error:", e);
+
     return NextResponse.json(
       { error: e?.message ?? "Failed to delete entry" },
       { status: 500 },
