@@ -12,9 +12,7 @@ export default async function HomePage() {
   }
 
   const user = await prisma.user.findUnique({
-    where: {
-      email: session.user.email,
-    },
+    where: { email: session.user.email },
     select: {
       role: true,
       active: true,
@@ -25,13 +23,14 @@ export default async function HomePage() {
     redirect("/login");
   }
 
-  if (user.role === "ADMIN") {
-    redirect("/admin/timesheets");
-  }
+  switch (user.role) {
+    case "ADMIN":
+      redirect("/admin/timesheets");
 
-  if (user.role === "ACCOUNTS") {
-    redirect("/admin/payroll");
-  }
+    case "ACCOUNTS":
+      redirect("/admin/payroll");
 
-  redirect("/timesheet");
+    default:
+      redirect("/timesheet");
+  }
 }
