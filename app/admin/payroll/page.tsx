@@ -13,7 +13,6 @@ function formatInputDate(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
-
   return `${year}-${month}-${day}`;
 }
 
@@ -55,7 +54,8 @@ export default async function AdminPayrollPage({
 
   const selectedFrom = params.from || formatInputDate(firstDayOfMonth);
   const selectedTo = params.to || formatInputDate(lastDayOfMonth);
-  const selectedUserId = params.userId || "";
+  const selectedUserId = params.userId || "all";
+  const isAllEmployees = selectedUserId === "all";
 
   const dateRangeIsValid =
     Boolean(selectedFrom) &&
@@ -72,33 +72,41 @@ export default async function AdminPayrollPage({
     },
   });
 
-  const selectedUser = selectedUserId
+  const selectedUser = !isAllEmployees
     ? users.find((user) => user.id === selectedUserId)
     : null;
 
-  const entries =
-    selectedUserId && dateRangeIsValid
-      ? await prisma.timesheetEntry.findMany({
-          where: {
-            date: {
-              gte: startOfDay(selectedFrom),
-              lte: endOfDay(selectedTo),
-            },
-            week: {
-              userId: selectedUserId,
-              status: "APPROVED",
+  const entries = dateRangeIsValid
+    ? await prisma.timesheetEntry.findMany({
+        where: {
+          date: {
+            gte: startOfDay(selectedFrom),
+            lte: endOfDay(selectedTo),
+          },
+          week: {
+            status: "APPROVED",
+            ...(isAllEmployees ? {} : { userId: selectedUserId }),
+          },
+        },
+        include: {
+          week: {
+            include: {
+              user: true,
             },
           },
-          orderBy: { date: "asc" },
-          include: {
-            week: {
-              include: {
-                user: true,
-              },
-            },
-          },
-        })
-      : [];
+        },
+      })
+    : [];
+
+  entries.sort((a, b) => {
+    const employeeA = (a.week.user.name || a.week.user.email || "").toLowerCase();
+    const employeeB = (b.week.user.name || b.week.user.email || "").toLowerCase();
+
+    const employeeComparison = employeeA.localeCompare(employeeB);
+    if (employeeComparison !== 0) return employeeComparison;
+
+    return a.date.getTime() - b.date.getTime();
+  });
 
   const totals = entries.reduce(
     (acc, entry) => {
@@ -120,12 +128,11 @@ export default async function AdminPayrollPage({
     }
   );
 
-  const exportQuery =
-    selectedUserId && dateRangeIsValid
-      ? `from=${encodeURIComponent(selectedFrom)}&to=${encodeURIComponent(
-          selectedTo
-        )}&userId=${encodeURIComponent(selectedUserId)}`
-      : "";
+  const exportQuery = dateRangeIsValid
+    ? `from=${encodeURIComponent(selectedFrom)}&to=${encodeURIComponent(
+        selectedTo
+      )}&userId=${encodeURIComponent(selectedUserId)}`
+    : "";
 
   const excelExportHref = exportQuery
     ? `/api/admin/payroll/export?${exportQuery}`
@@ -212,7 +219,7 @@ export default async function AdminPayrollPage({
             defaultValue={selectedUserId}
             className="mt-1 min-w-[260px] rounded border p-2"
           >
-            <option value="">Select employee</option>
+            <option value="all">All Employees</option>
             {users.map((user) => (
               <option key={user.id} value={user.id}>
                 {user.name || user.email}
@@ -237,12 +244,14 @@ export default async function AdminPayrollPage({
         </section>
       )}
 
-      {selectedUser && dateRangeIsValid && (
+      {dateRangeIsValid && (
         <section className="rounded-lg border bg-white p-4">
           <div className="grid gap-2 text-sm md:grid-cols-4">
             <div>
               <span className="font-medium">Employee:</span>{" "}
-              {selectedUser.name || selectedUser.email}
+              {isAllEmployees
+                ? "All Employees"
+                : selectedUser?.name || selectedUser?.email || "Unknown"}
             </div>
 
             <div>
@@ -256,17 +265,17 @@ export default async function AdminPayrollPage({
             </div>
 
             <div>
-              <span className="font-medium">Included:</span> Approved entries
-              only
+              <span className="font-medium">Included:</span> Approved entries only
             </div>
           </div>
         </section>
       )}
 
       <section className="overflow-x-auto rounded-lg border bg-white">
-        <table className="w-full min-w-[1200px] text-sm">
+        <table className="w-full min-w-[1320px] text-sm">
           <thead className="bg-gray-50 text-left">
             <tr>
+              {isAllEmployees && <th className="p-3">Employee</th>}
               <th className="p-3">Date</th>
               <th className="p-3">Day</th>
               <th className="p-3">Job / Site</th>
@@ -286,6 +295,11 @@ export default async function AdminPayrollPage({
           <tbody>
             {entries.map((entry) => (
               <tr key={entry.id} className="border-t align-top">
+                {isAllEmployees && (
+                  <td className="p-3 font-medium">
+                    {entry.week.user.name || entry.week.user.email || "Unknown"}
+                  </td>
+                )}
                 <td className="p-3">{formatDate(entry.date)}</td>
                 <td className="p-3">{formatDay(entry.date)}</td>
                 <td className="p-3 font-medium">{entry.job || "-"}</td>
@@ -316,12 +330,13 @@ export default async function AdminPayrollPage({
 
             {entries.length === 0 && (
               <tr>
-                <td className="p-6 text-gray-500" colSpan={13}>
+                <td
+                  className="p-6 text-gray-500"
+                  colSpan={isAllEmployees ? 14 : 13}
+                >
                   {!dateRangeIsValid
                     ? "Select a valid date range."
-                    : selectedUserId
-                      ? "No approved entries found for this employee and date range."
-                      : "Select an employee to view payroll data."}
+                    : "No approved entries found for this date range."}
                 </td>
               </tr>
             )}

@@ -1,4 +1,5 @@
 import "./globals.css";
+import TopNav from "./components/TopNav";
 
 export const metadata = {
   title: "Timesheets",
@@ -12,7 +13,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <TopNav />
+        {children}
+      </body>
     </html>
   );
 }

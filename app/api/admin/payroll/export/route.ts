@@ -48,9 +48,7 @@ export async function GET(req: Request) {
 
     const requestingUser = await prisma.user.findUnique({
       where: { email: session.user.email },
-      select: {
-        role: true,
-      },
+      select: { role: true },
     });
 
     if (
@@ -63,11 +61,12 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const from = searchParams.get("from") || "";
     const to = searchParams.get("to") || "";
-    const userId = searchParams.get("userId") || "";
+    const userId = searchParams.get("userId") || "all";
+    const isAllEmployees = userId === "all";
 
-    if (!from || !to || !userId) {
+    if (!from || !to) {
       return NextResponse.json(
-        { error: "From date, to date and employee are required" },
+        { error: "From date and to date are required" },
         { status: 400 }
       );
     }
@@ -83,15 +82,17 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Invalid date range" }, { status: 400 });
     }
 
-    const employee = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        name: true,
-        email: true,
-      },
-    });
+    const employee = !isAllEmployees
+      ? await prisma.user.findUnique({
+          where: { id: userId },
+          select: {
+            name: true,
+            email: true,
+          },
+        })
+      : null;
 
-    if (!employee) {
+    if (!isAllEmployees && !employee) {
       return NextResponse.json({ error: "Employee not found" }, { status: 404 });
     }
 
@@ -102,11 +103,27 @@ export async function GET(req: Request) {
           lte: toDate,
         },
         week: {
-          userId,
           status: "APPROVED",
+          ...(isAllEmployees ? {} : { userId }),
         },
       },
-      orderBy: { date: "asc" },
+      include: {
+        week: {
+          include: {
+            user: true,
+          },
+        },
+      },
+    });
+
+    entries.sort((a, b) => {
+      const employeeA = (a.week.user.name || a.week.user.email || "").toLowerCase();
+      const employeeB = (b.week.user.name || b.week.user.email || "").toLowerCase();
+
+      const employeeComparison = employeeA.localeCompare(employeeB);
+      if (employeeComparison !== 0) return employeeComparison;
+
+      return a.date.getTime() - b.date.getTime();
     });
 
     const totals = entries.reduce(
@@ -134,11 +151,14 @@ export async function GET(req: Request) {
     workbook.created = new Date();
 
     const worksheet = workbook.addWorksheet("Payroll");
+    const employeeDisplayName = isAllEmployees
+      ? "All Employees"
+      : employee?.name || employee?.email || "Employee";
 
     worksheet.addRow(["Accounts Payroll"]);
     worksheet.addRow([
       "Employee",
-      employee.name || employee.email,
+      employeeDisplayName,
       "From",
       formatDate(fromDate),
       "To",
@@ -148,6 +168,7 @@ export async function GET(req: Request) {
     worksheet.addRow([]);
 
     const headerRow = worksheet.addRow([
+      "Employee",
       "Date",
       "Day",
       "Job / Site",
@@ -167,6 +188,7 @@ export async function GET(req: Request) {
 
     for (const entry of entries) {
       worksheet.addRow([
+        entry.week.user.name || entry.week.user.email || "Unknown",
         formatDate(entry.date),
         formatDay(entry.date),
         entry.job || "-",
@@ -195,6 +217,7 @@ export async function GET(req: Request) {
     worksheet.addRow(["Total Hours", totals.total]);
 
     worksheet.columns = [
+      { width: 24 },
       { width: 12 },
       { width: 12 },
       { width: 28 },
@@ -214,11 +237,8 @@ export async function GET(req: Request) {
 
     const buffer = await workbook.xlsx.writeBuffer();
 
-    const employeeDisplayName =
-  employee.name || employee.email || "employee";
-
-const employeeName = safeFileName(employeeDisplayName);
-    const fileName = `payroll-${employeeName}-${from}-to-${to}.xlsx`;
+    const fileEmployeeName = safeFileName(employeeDisplayName);
+    const fileName = `payroll-${fileEmployeeName}-${from}-to-${to}.xlsx`;
 
     return new NextResponse(buffer, {
       status: 200,

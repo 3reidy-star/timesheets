@@ -13,10 +13,10 @@ import {
 
 const PAGE_WIDTH = 842;
 const PAGE_HEIGHT = 595;
-const MARGIN = 28;
+const MARGIN = 20;
 const HEADER_HEIGHT = 22;
 const ROW_HEIGHT = 18;
-const FONT_SIZE = 7;
+const FONT_SIZE = 6.5;
 const TITLE_SIZE = 16;
 
 type Column = {
@@ -179,7 +179,6 @@ function drawTableRow({
 
   for (let index = 0; index < columns.length; index += 1) {
     const column = columns[index];
-    const value = values[index] || "";
 
     page.drawRectangle({
       x,
@@ -192,7 +191,7 @@ function drawTableRow({
 
     drawCellText({
       page,
-      text: value,
+      text: values[index] || "",
       x,
       y,
       width: column.width,
@@ -229,11 +228,12 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const from = searchParams.get("from") || "";
     const to = searchParams.get("to") || "";
-    const userId = searchParams.get("userId") || "";
+    const userId = searchParams.get("userId") || "all";
+    const isAllEmployees = userId === "all";
 
-    if (!from || !to || !userId) {
+    if (!from || !to) {
       return NextResponse.json(
-        { error: "From date, to date and employee are required" },
+        { error: "From date and to date are required" },
         { status: 400 }
       );
     }
@@ -252,15 +252,17 @@ export async function GET(req: Request) {
       );
     }
 
-    const employee = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        name: true,
-        email: true,
-      },
-    });
+    const employee = !isAllEmployees
+      ? await prisma.user.findUnique({
+          where: { id: userId },
+          select: {
+            name: true,
+            email: true,
+          },
+        })
+      : null;
 
-    if (!employee) {
+    if (!isAllEmployees && !employee) {
       return NextResponse.json(
         { error: "Employee not found" },
         { status: 404 }
@@ -274,11 +276,27 @@ export async function GET(req: Request) {
           lte: toDate,
         },
         week: {
-          userId,
           status: "APPROVED",
+          ...(isAllEmployees ? {} : { userId }),
         },
       },
-      orderBy: { date: "asc" },
+      include: {
+        week: {
+          include: {
+            user: true,
+          },
+        },
+      },
+    });
+
+    entries.sort((a, b) => {
+      const employeeA = (a.week.user.name || a.week.user.email || "").toLowerCase();
+      const employeeB = (b.week.user.name || b.week.user.email || "").toLowerCase();
+
+      const employeeComparison = employeeA.localeCompare(employeeB);
+      if (employeeComparison !== 0) return employeeComparison;
+
+      return a.date.getTime() - b.date.getTime();
     });
 
     const totals = entries.reduce(
@@ -301,27 +319,29 @@ export async function GET(req: Request) {
       }
     );
 
+    const employeeDisplayName = isAllEmployees
+      ? "All Employees"
+      : employee?.name || employee?.email || "Employee";
+
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-    const employeeDisplayName =
-      employee.name || employee.email || "Employee";
-
     const columns: Column[] = [
-      { label: "Date", width: 52 },
-      { label: "Day", width: 52 },
-      { label: "Job / Site", width: 100 },
-      { label: "Type", width: 72 },
-      { label: "Start", width: 38, align: "center" },
-      { label: "Finish", width: 38, align: "center" },
-      { label: "Regular", width: 43, align: "right" },
-      { label: "OT M-F", width: 42, align: "right" },
-      { label: "OT Sat", width: 38, align: "right" },
-      { label: "OT Sun/BH", width: 48, align: "right" },
-      { label: "Night", width: 34, align: "center" },
-      { label: "Description", width: 105 },
-      { label: "Total", width: 42, align: "right" },
+      { label: "Employee", width: 72 },
+      { label: "Date", width: 45 },
+      { label: "Day", width: 45 },
+      { label: "Job / Site", width: 80 },
+      { label: "Type", width: 60 },
+      { label: "Start", width: 34, align: "center" },
+      { label: "Finish", width: 34, align: "center" },
+      { label: "Regular", width: 39, align: "right" },
+      { label: "OT M-F", width: 38, align: "right" },
+      { label: "OT Sat", width: 34, align: "right" },
+      { label: "OT Sun/BH", width: 42, align: "right" },
+      { label: "Night", width: 31, align: "center" },
+      { label: "Description", width: 88 },
+      { label: "Total", width: 37, align: "right" },
     ];
 
     let page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
@@ -386,6 +406,7 @@ export async function GET(req: Request) {
         font,
         boldFont,
         values: [
+          entry.week.user.name || entry.week.user.email || "Unknown",
           formatDate(entry.date),
           formatDay(entry.date),
           entry.job || "-",
@@ -459,30 +480,27 @@ export async function GET(req: Request) {
     }
 
     const pdfBytes = await pdf.save();
+    const fileName = `payroll-${safeFileName(
+      employeeDisplayName
+    )}-${from}-to-${to}.pdf`;
 
-const fileName = `payroll-${safeFileName(
-  employeeDisplayName
-)}-${from}-to-${to}.pdf`;
+    const pdfArrayBuffer = new ArrayBuffer(pdfBytes.byteLength);
+    new Uint8Array(pdfArrayBuffer).set(pdfBytes);
 
-// Copy the PDF bytes into a definite ArrayBuffer.
-// This avoids the ArrayBuffer | SharedArrayBuffer TypeScript error.
-const pdfArrayBuffer = new ArrayBuffer(pdfBytes.byteLength);
-new Uint8Array(pdfArrayBuffer).set(pdfBytes);
+    return new NextResponse(pdfArrayBuffer, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${fileName}"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (error) {
+    console.error("Payroll PDF export failed:", error);
 
-return new NextResponse(pdfArrayBuffer, {
-  status: 200,
-  headers: {
-    "Content-Type": "application/pdf",
-    "Content-Disposition": `attachment; filename="${fileName}"`,
-    "Cache-Control": "no-store",
-  },
-});
-} catch (error) {
-  console.error("Payroll PDF export failed:", error);
-
-  return NextResponse.json(
-    { error: "Failed to export payroll PDF" },
-    { status: 500 }
-  );
-}
+    return NextResponse.json(
+      { error: "Failed to export payroll PDF" },
+      { status: 500 }
+    );
+  }
 }
