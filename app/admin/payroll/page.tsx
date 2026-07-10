@@ -1,12 +1,19 @@
 import { prisma } from "@/app/lib/prisma";
 
-function startOfMonth(month: string) {
-  return new Date(`${month}-01T00:00:00`);
+function startOfDay(value: string) {
+  return new Date(`${value}T00:00:00`);
 }
 
-function endOfMonth(month: string) {
-  const [year, monthNumber] = month.split("-").map(Number);
-  return new Date(year, monthNumber, 0, 23, 59, 59);
+function endOfDay(value: string) {
+  return new Date(`${value}T23:59:59.999`);
+}
+
+function formatInputDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function formatDate(date: Date) {
@@ -34,19 +41,25 @@ export default async function AdminPayrollPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    month?: string;
+    from?: string;
+    to?: string;
     userId?: string;
   }>;
 }) {
   const params = await searchParams;
 
   const today = new Date();
-  const defaultMonth = `${today.getFullYear()}-${String(
-    today.getMonth() + 1
-  ).padStart(2, "0")}`;
+  const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
-  const selectedMonth = params.month || defaultMonth;
+  const selectedFrom = params.from || formatInputDate(firstDayOfMonth);
+  const selectedTo = params.to || formatInputDate(lastDayOfMonth);
   const selectedUserId = params.userId || "";
+
+  const dateRangeIsValid =
+    Boolean(selectedFrom) &&
+    Boolean(selectedTo) &&
+    startOfDay(selectedFrom) <= endOfDay(selectedTo);
 
   const users = await prisma.user.findMany({
     where: { active: true },
@@ -62,28 +75,29 @@ export default async function AdminPayrollPage({
     ? users.find((user) => user.id === selectedUserId)
     : null;
 
-  const entries = selectedUserId
-    ? await prisma.timesheetEntry.findMany({
-        where: {
-          date: {
-            gte: startOfMonth(selectedMonth),
-            lte: endOfMonth(selectedMonth),
-          },
-          week: {
-            userId: selectedUserId,
-            status: "APPROVED",
-          },
-        },
-        orderBy: { date: "asc" },
-        include: {
-          week: {
-            include: {
-              user: true,
+  const entries =
+    selectedUserId && dateRangeIsValid
+      ? await prisma.timesheetEntry.findMany({
+          where: {
+            date: {
+              gte: startOfDay(selectedFrom),
+              lte: endOfDay(selectedTo),
+            },
+            week: {
+              userId: selectedUserId,
+              status: "APPROVED",
             },
           },
-        },
-      })
-    : [];
+          orderBy: { date: "asc" },
+          include: {
+            week: {
+              include: {
+                user: true,
+              },
+            },
+          },
+        })
+      : [];
 
   const totals = entries.reduce(
     (acc, entry) => {
@@ -106,12 +120,12 @@ export default async function AdminPayrollPage({
   );
 
   return (
-    <main className="p-6 space-y-6">
+    <main className="space-y-6 p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Accounts Payroll</h1>
           <p className="text-sm text-gray-600">
-            Monthly approved timesheet summary for payroll processing.
+            Approved timesheet entries within a selected date range.
           </p>
         </div>
 
@@ -136,12 +150,24 @@ export default async function AdminPayrollPage({
 
       <form className="flex flex-wrap gap-4 rounded-lg border bg-white p-4">
         <div>
-          <label className="block text-sm font-medium">Month</label>
+          <label className="block text-sm font-medium">From date</label>
           <input
-            type="month"
-            name="month"
-            defaultValue={selectedMonth}
+            type="date"
+            name="from"
+            defaultValue={selectedFrom}
             className="mt-1 rounded border p-2"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium">To date</label>
+          <input
+            type="date"
+            name="to"
+            defaultValue={selectedTo}
+            className="mt-1 rounded border p-2"
+            required
           />
         </div>
 
@@ -171,18 +197,33 @@ export default async function AdminPayrollPage({
         </div>
       </form>
 
-      {selectedUser && (
+      {!dateRangeIsValid && (
+        <section className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          The from date must be on or before the to date.
+        </section>
+      )}
+
+      {selectedUser && dateRangeIsValid && (
         <section className="rounded-lg border bg-white p-4">
-          <div className="grid gap-2 text-sm md:grid-cols-3">
+          <div className="grid gap-2 text-sm md:grid-cols-4">
             <div>
               <span className="font-medium">Employee:</span>{" "}
               {selectedUser.name || selectedUser.email}
             </div>
+
             <div>
-              <span className="font-medium">Month:</span> {selectedMonth}
+              <span className="font-medium">From:</span>{" "}
+              {formatDate(startOfDay(selectedFrom))}
             </div>
+
             <div>
-              <span className="font-medium">Included:</span> Approved weeks only
+              <span className="font-medium">To:</span>{" "}
+              {formatDate(startOfDay(selectedTo))}
+            </div>
+
+            <div>
+              <span className="font-medium">Included:</span> Approved entries
+              only
             </div>
           </div>
         </section>
@@ -242,9 +283,11 @@ export default async function AdminPayrollPage({
             {entries.length === 0 && (
               <tr>
                 <td className="p-6 text-gray-500" colSpan={13}>
-                  {selectedUserId
-                    ? "No approved entries found for this employee and month."
-                    : "Select an employee to view payroll data."}
+                  {!dateRangeIsValid
+                    ? "Select a valid date range."
+                    : selectedUserId
+                      ? "No approved entries found for this employee and date range."
+                      : "Select an employee to view payroll data."}
                 </td>
               </tr>
             )}
