@@ -120,14 +120,20 @@ export default async function AdminPayrollPage({
     }
   );
 
-  const excelExportHref =
+  const exportQuery =
     selectedUserId && dateRangeIsValid
-      ? `/api/admin/payroll/export?from=${encodeURIComponent(
-          selectedFrom
-        )}&to=${encodeURIComponent(selectedTo)}&userId=${encodeURIComponent(
-          selectedUserId
-        )}`
+      ? `from=${encodeURIComponent(selectedFrom)}&to=${encodeURIComponent(
+          selectedTo
+        )}&userId=${encodeURIComponent(selectedUserId)}`
       : "";
+
+  const excelExportHref = exportQuery
+    ? `/api/admin/payroll/export?${exportQuery}`
+    : "";
+
+  const pdfExportHref = exportQuery
+    ? `/api/admin/payroll/export-pdf?${exportQuery}`
+    : "";
 
   return (
     <main className="space-y-6 p-6">
@@ -157,13 +163,22 @@ export default async function AdminPayrollPage({
             </button>
           )}
 
-          <button
-            type="button"
-            disabled
-            className="rounded border px-4 py-2 text-sm font-medium text-gray-400"
-          >
-            Download PDF
-          </button>
+          {pdfExportHref ? (
+            <Link
+              href={pdfExportHref}
+              className="rounded border px-4 py-2 text-sm font-medium hover:bg-gray-50"
+            >
+              Download PDF
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="rounded border px-4 py-2 text-sm font-medium text-gray-400"
+            >
+              Download PDF
+            </button>
+          )}
         </div>
       </div>
 
