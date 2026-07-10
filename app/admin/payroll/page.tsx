@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { prisma } from "@/app/lib/prisma";
 
 function startOfDay(value: string) {
@@ -119,6 +120,15 @@ export default async function AdminPayrollPage({
     }
   );
 
+  const exportHref =
+    selectedUserId && dateRangeIsValid
+      ? `/api/admin/payroll/export?from=${encodeURIComponent(
+          selectedFrom
+        )}&to=${encodeURIComponent(selectedTo)}&userId=${encodeURIComponent(
+          selectedUserId
+        )}`
+      : "";
+
   return (
     <main className="space-y-6 p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -130,13 +140,22 @@ export default async function AdminPayrollPage({
         </div>
 
         <div className="flex gap-2">
-          <button
-            type="button"
-            disabled
-            className="rounded border px-4 py-2 text-sm font-medium text-gray-400"
-          >
-            Download Excel
-          </button>
+          {exportHref ? (
+            <Link
+              href={exportHref}
+              className="rounded border px-4 py-2 text-sm font-medium hover:bg-gray-50"
+            >
+              Download Excel
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="rounded border px-4 py-2 text-sm font-medium text-gray-400"
+            >
+              Download Excel
+            </button>
+          )}
 
           <button
             type="button"
