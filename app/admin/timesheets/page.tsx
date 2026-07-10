@@ -5,7 +5,6 @@ import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 import { redirect } from "next/navigation";
-import TopNav from "@/app/components/TopNav";
 import AdminTimesheetsPageClient, {
   type AdminTimesheetWeekSummary,
 } from "./AdminTimesheetsPageClient";
@@ -63,7 +62,6 @@ export default async function AdminTimesheetsPage() {
       weekStart: toIso(week.weekStart),
       status: String(week.status),
 
-      // Shared payroll engine
       totalHours: computed.totals.paidHours,
       regularHours: computed.totals.regularHours,
       overtimeHours: computed.totals.overtimeTotal,
@@ -78,11 +76,8 @@ export default async function AdminTimesheetsPage() {
   });
 
   return (
-    <>
-      <TopNav />
-      <AdminTimesheetsPageClient
-        initialWeeks={formattedWeeks}
-      />
-    </>
+    <AdminTimesheetsPageClient
+      initialWeeks={formattedWeeks}
+    />
   );
 }
