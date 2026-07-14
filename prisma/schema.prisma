@@ -14,33 +14,34 @@ model User {
   emailVerified DateTime?
   image         String?
 
-  role          Role      @default(ENGINEER)
-  active        Boolean   @default(true)
+  role   Role    @default(ENGINEER)
+  active Boolean @default(true)
 
-  accounts      Account[]
+  accounts Account[]
 
-  entries       TimesheetEntry[]
-  weeks         TimesheetWeek[]
+  entries TimesheetEntry[]
+  weeks   TimesheetWeek[]
 
-  weekAuditsPerformed WeekAudit[] @relation("WeekAuditPerformedBy")
+  weekAuditsPerformed WeekAudit[]    @relation("WeekAuditPerformedBy")
+  dayApprovalsReviewed DayApproval[] @relation("DayApprovalReviewedBy")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 }
 
 model Account {
-  id                 String  @id @default(cuid())
-  userId             String
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?
-  access_token       String?
-  expires_at         Int?
-  token_type         String?
-  scope              String?
-  id_token           String?
-  session_state      String?
+  id                String @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -62,12 +63,13 @@ model TimesheetWeek {
   userId    String
   weekStart DateTime
   status    WeekStatus @default(DRAFT)
-  entries   TimesheetEntry[]
 
-  audits    WeekAudit[]
+  entries      TimesheetEntry[]
+  audits       WeekAudit[]
+  dayApprovals DayApproval[]
 
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @default(now()) @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@unique([userId, weekStart])
   @@index([userId])
@@ -76,40 +78,40 @@ model TimesheetWeek {
 }
 
 model TimesheetEntry {
-  id                String    @id @default(cuid())
+  id String @id @default(cuid())
 
-  weekId            String
-  userId            String
+  weekId String
+  userId String
 
-  date              DateTime
+  date DateTime
 
-  type              EntryType @default(WORK)
+  type EntryType @default(WORK)
 
-  job               String    @default("")
+  job String @default("")
 
-  description       String?
+  description String?
 
-  hours             Float
+  hours Float
 
-  startTime         String    @default("08:00")
-  finishTime        String    @default("17:00")
+  startTime  String @default("08:00")
+  finishTime String @default("17:00")
 
-  regularHours      Float     @default(0)
-  otMonFriHours     Float     @default(0)
-  otSatHours        Float     @default(0)
-  otSunBhHours      Float     @default(0)
+  regularHours  Float @default(0)
+  otMonFriHours Float @default(0)
+  otSatHours    Float @default(0)
+  otSunBhHours  Float @default(0)
 
-  leftEarlyByChoice Boolean   @default(false)
-  jobAndKnock       Boolean   @default(false)
+  leftEarlyByChoice Boolean @default(false)
+  jobAndKnock       Boolean @default(false)
 
-  overnight         Boolean   @default(false)
-  agreedRate        Float?
+  overnight  Boolean @default(false)
+  agreedRate Float?
 
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @default(now()) @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
-  week              TimesheetWeek @relation(fields: [weekId], references: [id])
-  user              User          @relation(fields: [userId], references: [id])
+  week TimesheetWeek @relation(fields: [weekId], references: [id])
+  user User          @relation(fields: [userId], references: [id])
 
   @@index([weekId])
   @@index([userId])
@@ -119,23 +121,48 @@ model TimesheetEntry {
 }
 
 model WeekAudit {
-  id            String        @id @default(cuid())
+  id String @id @default(cuid())
 
-  weekId        String
-  action        WeekAction
-  comment       String?
+  weekId  String
+  action  WeekAction
+  comment String?
 
   performedById String
-  performedBy   User          @relation("WeekAuditPerformedBy", fields: [performedById], references: [id])
+  performedBy   User   @relation("WeekAuditPerformedBy", fields: [performedById], references: [id])
 
-  createdAt     DateTime      @default(now())
+  createdAt DateTime @default(now())
 
-  week          TimesheetWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  week TimesheetWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
 
   @@index([weekId])
   @@index([performedById])
   @@index([createdAt])
   @@index([action])
+}
+
+model DayApproval {
+  id String @id @default(cuid())
+
+  weekId String
+  date   DateTime
+
+  status  DayApprovalStatus @default(PENDING)
+  comment String?
+
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  week       TimesheetWeek @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  reviewedBy User?         @relation("DayApprovalReviewedBy", fields: [reviewedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@unique([weekId, date])
+  @@index([weekId])
+  @@index([date])
+  @@index([status])
+  @@index([reviewedById])
 }
 
 enum Role {
@@ -165,4 +192,10 @@ enum WeekAction {
   APPROVED
   REJECTED
   EDITED
+}
+
+enum DayApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
