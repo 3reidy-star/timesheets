@@ -227,6 +227,7 @@ export default function TimesheetPage() {
   const [computed, setComputed] = useState<ComputedWeek | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
 
   const [weekStartIso, setWeekStartIso] = useState(() => {
     const initial = parseWeekStartFromQuery(sp.get("weekStart"));
@@ -365,6 +366,38 @@ export default function TimesheetPage() {
 
   const isDraft = week?.status === "DRAFT";
   const canSubmitWeek = isDraft && (week?.entries?.length ?? 0) > 0 && !loading && !submitting;
+
+  async function deleteEntry(entry: Entry, dayEntryCount: number) {
+    if (!week || deletingEntryId) return;
+
+    const dateLabel = `${dayLong(dateKey(entry.date))} ${shortDate(dateKey(entry.date))}`;
+    const extraWarning =
+      dayEntryCount > 1
+        ? "\n\nThis day contains multiple entries. Only the selected entry will be deleted."
+        : "";
+
+    const confirmed = window.confirm(
+      `Delete this timesheet entry for ${dateLabel}?${extraWarning}\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setErr(null);
+    setDeletingEntryId(entry.id);
+
+    try {
+      const r = await fetch(`/api/entry/${encodeURIComponent(entry.id)}`, {
+        method: "DELETE",
+      });
+      const data = await readJsonOrText(r);
+      if (!r.ok) throw new Error((data as any)?.error ?? "Failed to delete entry");
+      await loadWeek();
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to delete entry");
+    } finally {
+      setDeletingEntryId(null);
+    }
+  }
 
   async function submitWeek() {
     if (!week || !canSubmitWeek) return;
@@ -738,13 +771,23 @@ export default function TimesheetPage() {
                                 </div>
                               </div>
 
-                              {isDraft ? (
-                                <Link
-                                  href={`/timesheet/entry/${encodeURIComponent(e.id)}`}
-                                  className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-50"
-                                >
-                                  Edit
-                                </Link>
+                              {isDraft || week.status === "REJECTED" ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <Link
+                                    href={`/timesheet/entry/${encodeURIComponent(e.id)}`}
+                                    className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-50"
+                                  >
+                                    Edit
+                                  </Link>
+                                  <button
+                                    type="button"
+                                    onClick={() => deleteEntry(e, list.length)}
+                                    disabled={deletingEntryId !== null}
+                                    className="inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {deletingEntryId === e.id ? "Deleting…" : "Delete"}
+                                  </button>
+                                </div>
                               ) : null}
                             </div>
                           </div>
@@ -844,13 +887,23 @@ export default function TimesheetPage() {
                               ) : null}
                             </div>
 
-                            {isDraft ? (
-                              <Link
-                                href={`/timesheet/entry/${encodeURIComponent(e.id)}`}
-                                className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-50"
-                              >
-                                Edit
-                              </Link>
+                            {isDraft || week.status === "REJECTED" ? (
+                              <div className="flex shrink-0 flex-col gap-2">
+                                <Link
+                                  href={`/timesheet/entry/${encodeURIComponent(e.id)}`}
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-center text-xs font-semibold text-slate-900 hover:bg-slate-50"
+                                >
+                                  Edit
+                                </Link>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteEntry(e, list.length)}
+                                  disabled={deletingEntryId !== null}
+                                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {deletingEntryId === e.id ? "Deleting…" : "Delete"}
+                                </button>
+                              </div>
                             ) : null}
                           </div>
                         </div>

@@ -1,5 +1,6 @@
 export const runtime = "nodejs";
 
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
 
@@ -62,6 +63,79 @@ export async function GET(
     console.error("api/entry/[id] GET error:", e);
     return NextResponse.json(
       { error: e?.message ?? "Failed to load entry" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  _req: Request,
+  ctx: { params: Promise<{ id: string }> | { id: string } }
+) {
+  try {
+    const session = await auth();
+
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const p = (ctx as any).params;
+    const { id } =
+      typeof (p as any)?.then === "function"
+        ? await (p as Promise<{ id: string }>)
+        : (p as { id: string });
+
+    if (!id || typeof id !== "string") {
+      return NextResponse.json({ error: "Missing entry id" }, { status: 400 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: { id: true, active: true },
+    });
+
+    if (!user || !user.active) {
+      return NextResponse.json({ error: "User not found or inactive" }, { status: 403 });
+    }
+
+    const entry = await prisma.timesheetEntry.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        userId: true,
+        week: {
+          select: {
+            status: true,
+          },
+        },
+      },
+    });
+
+    if (!entry) {
+      return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+    }
+
+    if (entry.userId !== user.id) {
+      return NextResponse.json(
+        { error: "You can only delete your own timesheet entries" },
+        { status: 403 }
+      );
+    }
+
+    if (entry.week.status !== "DRAFT" && entry.week.status !== "REJECTED") {
+      return NextResponse.json(
+        { error: "Submitted or approved timesheet entries cannot be deleted" },
+        { status: 409 }
+      );
+    }
+
+    await prisma.timesheetEntry.delete({ where: { id } });
+
+    return NextResponse.json({ success: true });
+  } catch (e: any) {
+    console.error("api/entry/[id] DELETE error:", e);
+    return NextResponse.json(
+      { error: e?.message ?? "Failed to delete entry" },
       { status: 500 }
     );
   }
