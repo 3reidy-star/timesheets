@@ -325,8 +325,13 @@ export default function TimesheetEntryEditPageClient() {
   const sp = useSearchParams();
 
   const entryId = String(params?.id ?? "");
- const qsWeekStart = sp.get("weekStart");
-const adminMode = sp.get("admin") === "1";
+  const qsWeekStart = sp.get("weekStart");
+  const adminMode = sp.get("admin") === "1";
+  const returnToParam = sp.get("returnTo");
+  const adminReturnHref =
+    returnToParam && returnToParam.startsWith("/") && !returnToParam.startsWith("//")
+      ? returnToParam
+      : "/admin/timesheets";
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -547,12 +552,11 @@ const canEdit = isDraft || adminMode;
         : entryWeek.weekStart;
 
       if (adminMode) {
-  router.push("/admin/timesheets");
-} else {
-  router.push(`/timesheet?weekStart=${encodeURIComponent(nextWeekStart)}`);
-}
+        router.push(adminReturnHref);
+      } else {
+        router.push(`/timesheet?weekStart=${encodeURIComponent(nextWeekStart)}`);
+      }
 
-router.refresh();
       router.refresh();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to update entry");
@@ -561,11 +565,13 @@ router.refresh();
     }
   }
 
-  const backHref = entryWeek?.weekStart
-    ? `/timesheet?weekStart=${encodeURIComponent(entryWeek.weekStart)}`
-    : qsWeekStart
-    ? `/timesheet?weekStart=${encodeURIComponent(qsWeekStart)}`
-    : "/timesheet";
+  const backHref = adminMode
+    ? adminReturnHref
+    : entryWeek?.weekStart
+      ? `/timesheet?weekStart=${encodeURIComponent(entryWeek.weekStart)}`
+      : qsWeekStart
+        ? `/timesheet?weekStart=${encodeURIComponent(qsWeekStart)}`
+        : "/timesheet";
 
   if (loading) {
     return (
@@ -924,7 +930,7 @@ router.refresh();
 
           <div className="flex items-center justify-between">
             <Link href={backHref} className="text-sm font-semibold text-slate-600 hover:text-slate-800">
-              ← Back to weekly timesheet
+              ← Back
             </Link>
           </div>
         </div>
