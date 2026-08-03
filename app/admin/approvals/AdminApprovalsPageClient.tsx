@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export type ApprovalEntry = {
   id: string;
@@ -292,6 +292,11 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
   const allRowsReviewed =
     reviewableRows.length > 0 && reviewedCount === reviewableRows.length;
 
+  const nextReviewKey = useMemo(
+    () => reviewableRows.find((key) => !reviewedRows.has(key)) ?? null,
+    [reviewableRows, reviewedRows],
+  );
+
   const totals = useMemo(
     () =>
       visibleWeeks.reduce(
@@ -314,6 +319,15 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      return next;
+    });
+  }
+
+  function approveRow(key: string) {
+    setReviewedRows((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
       return next;
     });
   }
@@ -477,6 +491,28 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     }
   }
 
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isTyping =
+        tagName === "input" ||
+        tagName === "textarea" ||
+        tagName === "select" ||
+        target?.isContentEditable;
+
+      if (isTyping || acting || bulkApproving) return;
+
+      if (event.key === "Enter" && nextReviewKey) {
+        event.preventDefault();
+        approveRow(nextReviewKey);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [acting, bulkApproving, nextReviewKey]);
+
   return (
     <main className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -485,8 +521,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             Weekly Approvals
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Review every person&apos;s times and jobs by day, then approve the
-            submitted weeks together.
+            Approve each daily line as you review it, then approve the submitted weeks together.
           </p>
         </div>
 
@@ -598,7 +633,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
           <SummaryPill label="Employees" value={visibleWeeks.length} />
           <SummaryPill label="Paid" value={fmt2(totals.paid)} />
           <SummaryPill
-            label="Reviewed"
+            label="Approved"
             value={`${reviewedCount}/${reviewableRows.length}`}
           />
         </div>
@@ -649,7 +684,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
                   <div className="flex items-center gap-3">
                     <div className="text-xs font-semibold text-slate-600">
-                      Reviewed {reviewedDayCount}/{reviewableDayKeys.length}
+                      Approved {reviewedDayCount}/{reviewableDayKeys.length}
                     </div>
                     <button
                       type="button"
@@ -660,7 +695,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                       }
                       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
                     >
-                      Review Today
+                      Approve Today
                     </button>
                   </div>
                 </div>
@@ -669,7 +704,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                   <table className="w-full min-w-[1080px] text-sm">
                     <thead>
                       <tr className="border-t border-slate-200 bg-white text-left text-xs font-semibold text-slate-600">
-                        <th className="px-4 py-3">Reviewed</th>
+                        <th className="px-4 py-3">Approval</th>
                         <th className="px-4 py-3">Employee</th>
                         <th className="px-4 py-3">Start</th>
                         <th className="px-4 py-3">Finish</th>
@@ -687,6 +722,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                         const key = rowKey(week.id, day.iso);
                         const expanded = expandedRows.has(key);
                         const reviewed = reviewedRows.has(key);
+                        const isNextToReview = key === nextReviewKey;
                         const canReview =
                           week.status === "SUBMITTED" && entries.length > 0;
 
@@ -718,12 +754,14 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                         );
 
                         const rowBackground = reviewed
-                          ? "bg-emerald-50/60"
-                          : missingTime
-                            ? "bg-red-50/60"
-                            : hasLongShift
-                              ? "bg-amber-50/60"
-                              : "";
+                          ? "bg-emerald-50/70"
+                          : isNextToReview
+                            ? "bg-cyan-50/70"
+                            : missingTime
+                              ? "bg-red-50/60"
+                              : hasLongShift
+                                ? "bg-amber-50/60"
+                                : "";
 
                         return (
                           <>
@@ -733,15 +771,31 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                             >
                               <td className="px-4 py-4">
                                 {canReview ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={reviewed}
-                                    onChange={() =>
-                                      toggleRow(setReviewedRows, key)
-                                    }
-                                    aria-label={`Reviewed ${employeeName(week)} ${day.name}`}
-                                    className="h-5 w-5 rounded border-slate-300 text-emerald-600"
-                                  />
+                                  reviewed ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        toggleRow(setReviewedRows, key)
+                                      }
+                                      className="inline-flex items-center rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                                      aria-label={`Approved ${employeeName(week)} ${day.name}. Click to undo.`}
+                                    >
+                                      Approved ✓
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => approveRow(key)}
+                                      className={
+                                        isNextToReview
+                                          ? "inline-flex items-center rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white ring-2 ring-cyan-300 ring-offset-2 hover:bg-cyan-500"
+                                          : "inline-flex items-center rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700"
+                                      }
+                                      aria-label={`Approve ${employeeName(week)} ${day.name}`}
+                                    >
+                                      Approve
+                                    </button>
+                                  )
                                 ) : (
                                   <span className="text-slate-300">—</span>
                                 )}
@@ -759,6 +813,11 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 {missingTime ? (
                                   <div className="mt-1 text-[11px] font-semibold text-red-700">
                                     Missing time
+                                  </div>
+                                ) : null}
+                                {isNextToReview ? (
+                                  <div className="mt-1 text-[11px] font-semibold text-cyan-700">
+                                    Next to approve
                                   </div>
                                 ) : null}
                               </td>
@@ -980,12 +1039,17 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             <h2 className="text-lg font-semibold">Final Approval</h2>
             <p className="mt-1 text-sm text-slate-300">
               {reviewableRows.length === 0
-                ? "There are no submitted daily rows to review."
-                : `${reviewedCount} of ${reviewableRows.length} submitted daily rows reviewed.`}
+                ? "There are no submitted daily rows to approve."
+                : `${reviewedCount} of ${reviewableRows.length} submitted daily rows approved.`}
             </p>
             {!allRowsReviewed && reviewableRows.length > 0 ? (
               <p className="mt-1 text-xs font-semibold text-amber-300">
-                Review every submitted row before approving the weeks.
+                Approve every submitted row before approving the weeks.
+              </p>
+            ) : null}
+            {nextReviewKey ? (
+              <p className="mt-2 text-xs text-slate-400">
+                Keyboard shortcut: press Enter to approve the highlighted next row.
               </p>
             ) : null}
           </div>
