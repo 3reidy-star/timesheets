@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 export type ApprovalEntry = {
   id: string;
@@ -67,15 +67,7 @@ type ActingState = {
   action: "APPROVE" | "REJECT";
 } | null;
 
-const DAY_NAMES = [
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-  "Sunday",
-];
+const REVIEWED_STORAGE_KEY = "admin-approvals-reviewed-entry-ids";
 
 function dateKey(value: string) {
   return value.slice(0, 10);
@@ -102,12 +94,6 @@ function startOfWeekMonday(dateInput: Date) {
   return date;
 }
 
-function addDays(dateInput: Date, days: number) {
-  const date = new Date(dateInput);
-  date.setDate(date.getDate() + days);
-  return date;
-}
-
 function addWeeks(value: string, amount: number) {
   const date = parseLocalDate(value);
   date.setDate(date.getDate() + amount * 7);
@@ -118,8 +104,9 @@ function formatDate(value: string) {
   return parseLocalDate(value).toLocaleDateString("en-GB");
 }
 
-function formatShortDate(value: string) {
+function formatDay(value: string) {
   return parseLocalDate(value).toLocaleDateString("en-GB", {
+    weekday: "long",
     day: "2-digit",
     month: "short",
   });
@@ -155,13 +142,8 @@ function getEntryLabel(entry: ApprovalEntry) {
   return entry.job?.trim() || entry.description?.trim() || displayType(entry.type);
 }
 
-function rowKey(weekId: string, dayIso: string) {
-  return `${weekId}:${dayIso}`;
-}
-
 function StatusBadge({ status }: { status: string }) {
   const normalised = status.toUpperCase();
-
   const className =
     normalised === "SUBMITTED"
       ? "bg-blue-50 text-blue-800 ring-blue-200"
@@ -172,9 +154,7 @@ function StatusBadge({ status }: { status: string }) {
           : "bg-amber-50 text-amber-800 ring-amber-200";
 
   return (
-    <span
-      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${className}`}
-    >
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${className}`}>
       {normalised}
     </span>
   );
@@ -182,7 +162,6 @@ function StatusBadge({ status }: { status: string }) {
 
 function EntryTypeBadge({ type }: { type: string }) {
   const normalised = type.toUpperCase();
-
   const className =
     normalised === "WORK"
       ? "bg-cyan-50 text-cyan-800 ring-cyan-200"
@@ -195,106 +174,76 @@ function EntryTypeBadge({ type }: { type: string }) {
             : "bg-slate-50 text-slate-700 ring-slate-200";
 
   return (
-    <span
-      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${className}`}
-    >
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${className}`}>
       {displayType(type).toUpperCase()}
     </span>
   );
 }
 
+function SummaryPill({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-2xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200">
+      <div className="text-[11px] font-semibold text-slate-500">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-900">{value}</div>
+    </div>
+  );
+}
+
 async function readJsonOrText(response: Response) {
   const contentType = response.headers.get("content-type") || "";
-
-  if (contentType.includes("application/json")) {
-    return response.json();
-  }
-
+  if (contentType.includes("application/json")) return response.json();
   return { error: (await response.text()).slice(0, 1200) };
+}
+
+function safeReadReviewedEntries() {
+  if (typeof window === "undefined") return new Set<string>();
+
+  try {
+    const raw = window.sessionStorage.getItem(REVIEWED_STORAGE_KEY);
+    if (!raw) return new Set<string>();
+    const values = JSON.parse(raw);
+    return new Set(Array.isArray(values) ? values.filter((value) => typeof value === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
 }
 
 export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
   const currentMonday = formatInputDate(startOfWeekMonday(new Date()));
-
   const availableWeekStarts = useMemo(
-    () =>
-      Array.from(
-        new Set(initialWeeks.map((week) => dateKey(week.weekStart))),
-      ).sort((a, b) => b.localeCompare(a)),
+    () => Array.from(new Set(initialWeeks.map((week) => dateKey(week.weekStart)))).sort((a, b) => b.localeCompare(a)),
     [initialWeeks],
   );
 
   const [weeks, setWeeks] = useState(initialWeeks);
   const [selectedWeekStart, setSelectedWeekStart] = useState(
-    availableWeekStarts.includes(currentMonday)
-      ? currentMonday
-      : availableWeekStarts[0] || currentMonday,
+    availableWeekStarts.includes(currentMonday) ? currentMonday : availableWeekStarts[0] || currentMonday,
   );
-  const [statusFilter, setStatusFilter] = useState("ALL");
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [reviewedRows, setReviewedRows] = useState<Set<string>>(new Set());
+  const [statusFilter, setStatusFilter] = useState("SUBMITTED");
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<ActingState>(null);
-  const [bulkApproving, setBulkApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewedEntries, setReviewedEntries] = useState<Set<string>>(new Set());
+  const [storageLoaded, setStorageLoaded] = useState(false);
+  const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
 
-  const selectedMonday = useMemo(
-    () => parseLocalDate(selectedWeekStart),
-    [selectedWeekStart],
-  );
+  useEffect(() => {
+    setReviewedEntries(safeReadReviewedEntries());
+    setStorageLoaded(true);
+  }, []);
 
-  const days = useMemo(
-    () =>
-      DAY_NAMES.map((name, index) => {
-        const date = addDays(selectedMonday, index);
-        return { name, iso: formatInputDate(date) };
-      }),
-    [selectedMonday],
-  );
+  useEffect(() => {
+    if (!storageLoaded || typeof window === "undefined") return;
+    window.sessionStorage.setItem(REVIEWED_STORAGE_KEY, JSON.stringify(Array.from(reviewedEntries)));
+  }, [reviewedEntries, storageLoaded]);
 
   const visibleWeeks = useMemo(
     () =>
       weeks
         .filter((week) => dateKey(week.weekStart) === selectedWeekStart)
-        .filter(
-          (week) => statusFilter === "ALL" || week.status === statusFilter,
-        )
+        .filter((week) => statusFilter === "ALL" || week.status === statusFilter)
         .sort((a, b) => employeeName(a).localeCompare(employeeName(b))),
     [weeks, selectedWeekStart, statusFilter],
-  );
-
-  const submittedWeeks = visibleWeeks.filter(
-    (week) => week.status === "SUBMITTED",
-  );
-
-  const reviewableRows = useMemo(() => {
-    const keys: string[] = [];
-
-    for (const week of submittedWeeks) {
-      for (const day of days) {
-        const hasEntry = week.entries.some(
-          (entry) => dateKey(entry.date) === day.iso,
-        );
-
-        if (hasEntry) {
-          keys.push(rowKey(week.id, day.iso));
-        }
-      }
-    }
-
-    return keys;
-  }, [submittedWeeks, days]);
-
-  const reviewedCount = reviewableRows.filter((key) =>
-    reviewedRows.has(key),
-  ).length;
-
-  const allRowsReviewed =
-    reviewableRows.length > 0 && reviewedCount === reviewableRows.length;
-
-  const nextReviewKey = useMemo(
-    () => reviewableRows.find((key) => !reviewedRows.has(key)) ?? null,
-    [reviewableRows, reviewedRows],
   );
 
   const totals = useMemo(
@@ -311,101 +260,92 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     [visibleWeeks],
   );
 
-  function toggleRow(
-    setter: React.Dispatch<React.SetStateAction<Set<string>>>,
-    key: string,
-  ) {
-    setter((current) => {
+  function toggleEntryReview(entryId: string) {
+    setReviewedEntries((current) => {
       const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      if (next.has(entryId)) next.delete(entryId);
+      else next.add(entryId);
       return next;
     });
   }
 
-  function approveRow(key: string) {
-    setReviewedRows((current) => {
-      if (current.has(key)) return current;
+  function toggleEntryDetails(entryId: string) {
+    setExpandedEntries((current) => {
       const next = new Set(current);
-      next.add(key);
+      if (next.has(entryId)) next.delete(entryId);
+      else next.add(entryId);
       return next;
     });
   }
 
-  function reviewAllVisible() {
-    setReviewedRows((current) => {
+  function approveAllEntriesForWeek(week: ApprovalWeek) {
+    setReviewedEntries((current) => {
       const next = new Set(current);
-      for (const key of reviewableRows) next.add(key);
+      for (const entry of week.entries) next.add(entry.id);
       return next;
     });
   }
 
-  function clearVisibleReviews() {
-    setReviewedRows((current) => {
+  function clearEntriesForWeek(week: ApprovalWeek) {
+    setReviewedEntries((current) => {
       const next = new Set(current);
-      for (const key of reviewableRows) next.delete(key);
+      for (const entry of week.entries) next.delete(entry.id);
       return next;
     });
   }
 
-  function reviewDay(dayIso: string) {
-    const keys = reviewableRows.filter((key) => key.endsWith(`:${dayIso}`));
-    setReviewedRows((current) => {
-      const next = new Set(current);
-      for (const key of keys) next.add(key);
-      return next;
-    });
-  }
-
-  async function reviewWeek(
-    weekId: string,
-    action: "APPROVE" | "REJECT",
-    reviewComment?: string | null,
-  ) {
+  async function reviewWeek(week: ApprovalWeek, action: "APPROVE" | "REJECT", reviewComment?: string | null) {
     setError(null);
-    setActing({ weekId, action });
+    setActing({ weekId: week.id, action });
 
     try {
       const response = await fetch("/api/week/review", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          weekId,
+          weekId: week.id,
           action,
           comment: reviewComment?.trim() || null,
         }),
       });
 
       const data = await readJsonOrText(response);
-
       if (!response.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Failed to review week",
-        );
+        throw new Error((data as { error?: string }).error || "Failed to review week");
       }
 
       setWeeks((current) =>
-        current.map((week) =>
-          week.id === weekId
-            ? {
-                ...week,
-                status: action === "APPROVE" ? "APPROVED" : "DRAFT",
-              }
-            : week,
+        current.map((item) =>
+          item.id === week.id ? { ...item, status: action === "APPROVE" ? "APPROVED" : "DRAFT" } : item,
         ),
       );
 
+      clearEntriesForWeek(week);
+      setComment("");
       return true;
     } catch (reviewError) {
-      setError(
-        reviewError instanceof Error
-          ? reviewError.message
-          : "Failed to review week",
-      );
+      setError(reviewError instanceof Error ? reviewError.message : "Failed to review week");
       return false;
     } finally {
       setActing(null);
     }
+  }
+
+  async function approveWeek(week: ApprovalWeek) {
+    const reviewedCount = week.entries.filter((entry) => reviewedEntries.has(entry.id)).length;
+    const allReviewed = week.entries.length > 0 && reviewedCount === week.entries.length;
+
+    if (!allReviewed) {
+      setError(`Approve all ${week.entries.length} line${week.entries.length === 1 ? "" : "s"} for ${employeeName(week)} before approving the week.`);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Approve ${employeeName(week)}'s week commencing ${formatDate(week.weekStart)}?`,
+    );
+    if (!confirmed) return;
+
+    await reviewWeek(week, "APPROVE", comment);
   }
 
   async function rejectWeek(week: ApprovalWeek) {
@@ -413,144 +353,31 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
       `Why is ${employeeName(week)}'s timesheet being rejected?`,
       comment,
     );
-
     if (rejectionComment === null) return;
-
     if (!rejectionComment.trim()) {
       setError("A rejection comment is required.");
       return;
     }
 
-    const successful = await reviewWeek(
-      week.id,
-      "REJECT",
-      rejectionComment,
-    );
-
-    if (successful) {
-      setComment("");
-      setReviewedRows((current) => {
-        const next = new Set(current);
-        for (const day of days) next.delete(rowKey(week.id, day.iso));
-        return next;
-      });
-    }
+    await reviewWeek(week, "REJECT", rejectionComment);
   }
-
-  async function approveAllSubmitted() {
-    if (!allRowsReviewed || submittedWeeks.length === 0) return;
-
-    const confirmed = window.confirm(
-      `Approve ${submittedWeeks.length} submitted timesheet${
-        submittedWeeks.length === 1 ? "" : "s"
-      } for the week commencing ${formatDate(selectedWeekStart)}?`,
-    );
-
-    if (!confirmed) return;
-
-    setError(null);
-    setBulkApproving(true);
-
-    try {
-      for (const week of submittedWeeks) {
-        const response = await fetch("/api/week/review", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            weekId: week.id,
-            action: "APPROVE",
-            comment: comment.trim() || null,
-          }),
-        });
-
-        const data = await readJsonOrText(response);
-
-        if (!response.ok) {
-          throw new Error(
-            (data as { error?: string }).error ||
-              `Failed to approve ${employeeName(week)}`,
-          );
-        }
-
-        setWeeks((current) =>
-          current.map((item) =>
-            item.id === week.id ? { ...item, status: "APPROVED" } : item,
-          ),
-        );
-      }
-
-      setComment("");
-    } catch (bulkError) {
-      setError(
-        bulkError instanceof Error
-          ? bulkError.message
-          : "Failed to approve submitted weeks",
-      );
-    } finally {
-      setBulkApproving(false);
-    }
-  }
-
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      const tagName = target?.tagName?.toLowerCase();
-      const isTyping =
-        tagName === "input" ||
-        tagName === "textarea" ||
-        tagName === "select" ||
-        target?.isContentEditable;
-
-      if (isTyping || acting || bulkApproving) return;
-
-      if (event.key === "Enter" && nextReviewKey) {
-        event.preventDefault();
-        approveRow(nextReviewKey);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [acting, bulkApproving, nextReviewKey]);
 
   return (
     <main className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Weekly Approvals
-          </h1>
+          <h1 className="text-2xl font-semibold text-slate-900">Weekly Approvals</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Approve each daily line as you review it, then approve the submitted weeks together.
+            Review one employee at a time, approve each entry, then approve their completed week.
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <Link
-            href="/admin/timesheets"
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50"
-          >
-            Detailed Timesheets
-          </Link>
-
-          <button
-            type="button"
-            onClick={reviewAllVisible}
-            disabled={reviewableRows.length === 0}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Review All
-          </button>
-
-          <button
-            type="button"
-            onClick={clearVisibleReviews}
-            disabled={reviewedCount === 0}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Clear Review
-          </button>
-        </div>
+        <Link
+          href="/admin/timesheets"
+          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+        >
+          Detailed Timesheets
+        </Link>
       </div>
 
       {error ? (
@@ -559,40 +386,28 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </div>
       ) : null}
 
-      <section className="grid gap-4 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:grid-cols-[1fr_1fr_1fr_1.2fr]">
+      <section className="grid gap-4 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:grid-cols-[1.2fr_1fr_1.3fr]">
         <div>
-          <label className="block text-xs font-semibold text-slate-600">
-            Week commencing Monday
-          </label>
+          <label className="block text-xs font-semibold text-slate-600">Week commencing Monday</label>
           <div className="mt-1 flex gap-2">
             <button
               type="button"
-              onClick={() =>
-                setSelectedWeekStart((current) => addWeeks(current, -1))
-              }
+              onClick={() => setSelectedWeekStart((current) => addWeeks(current, -1))}
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
             >
               ←
             </button>
-
             <input
               type="date"
               value={selectedWeekStart}
               onChange={(event) =>
-                setSelectedWeekStart(
-                  formatInputDate(
-                    startOfWeekMonday(parseLocalDate(event.target.value)),
-                  ),
-                )
+                setSelectedWeekStart(formatInputDate(startOfWeekMonday(parseLocalDate(event.target.value))))
               }
               className="min-w-0 flex-1 rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
             />
-
             <button
               type="button"
-              onClick={() =>
-                setSelectedWeekStart((current) => addWeeks(current, 1))
-              }
+              onClick={() => setSelectedWeekStart((current) => addWeeks(current, 1))}
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
             >
               →
@@ -601,16 +416,14 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </div>
 
         <label>
-          <span className="block text-xs font-semibold text-slate-600">
-            Status
-          </span>
+          <span className="block text-xs font-semibold text-slate-600">Status</span>
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
             className="mt-1 w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
           >
-            <option value="ALL">All statuses</option>
             <option value="SUBMITTED">Submitted</option>
+            <option value="ALL">All statuses</option>
             <option value="APPROVED">Approved</option>
             <option value="DRAFT">Draft</option>
             <option value="REJECTED">Rejected</option>
@@ -618,9 +431,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </label>
 
         <label>
-          <span className="block text-xs font-semibold text-slate-600">
-            Approval comment
-          </span>
+          <span className="block text-xs font-semibold text-slate-600">Approval comment</span>
           <input
             value={comment}
             onChange={(event) => setComment(event.target.value)}
@@ -628,15 +439,13 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             className="mt-1 w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
           />
         </label>
+      </section>
 
-        <div className="grid grid-cols-3 gap-2">
-          <SummaryPill label="Employees" value={visibleWeeks.length} />
-          <SummaryPill label="Paid" value={fmt2(totals.paid)} />
-          <SummaryPill
-            label="Approved"
-            value={`${reviewedCount}/${reviewableRows.length}`}
-          />
-        </div>
+      <section className="grid gap-3 sm:grid-cols-4">
+        <SummaryPill label="Employees" value={visibleWeeks.length} />
+        <SummaryPill label="Paid hours" value={fmt2(totals.paid)} />
+        <SummaryPill label="Overtime" value={fmt2(totals.overtime)} />
+        <SummaryPill label="Overnights" value={totals.overnights} />
       </section>
 
       {visibleWeeks.length === 0 ? (
@@ -645,450 +454,231 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </section>
       ) : (
         <div className="space-y-6">
-          {days.map((day) => {
-            const dayRows = visibleWeeks.map((week) => {
-              const entries = week.entries.filter(
-                (entry) => dateKey(entry.date) === day.iso,
-              );
-              const computedDay = week.computed.days.find(
-                (item) => item.date === day.iso,
-              );
-              return { week, entries, computedDay };
+          {visibleWeeks.map((week) => {
+            const sortedEntries = [...week.entries].sort((a, b) => {
+              const dateCompare = dateKey(a.date).localeCompare(dateKey(b.date));
+              if (dateCompare !== 0) return dateCompare;
+              return (a.startTime || "").localeCompare(b.startTime || "");
             });
 
-            const reviewableDayKeys = dayRows
-              .filter(
-                ({ week, entries }) =>
-                  week.status === "SUBMITTED" && entries.length > 0,
-              )
-              .map(({ week }) => rowKey(week.id, day.iso));
+            const reviewedCount = sortedEntries.filter((entry) => reviewedEntries.has(entry.id)).length;
+            const allReviewed = sortedEntries.length > 0 && reviewedCount === sortedEntries.length;
+            const isSubmitted = week.status === "SUBMITTED";
+            const returnTo = `/admin/approvals?weekStart=${encodeURIComponent(selectedWeekStart)}`;
 
-            const reviewedDayCount = reviewableDayKeys.filter((key) =>
-              reviewedRows.has(key),
-            ).length;
+            const entriesByDay = new Map<string, ApprovalEntry[]>();
+            for (const entry of sortedEntries) {
+              const key = dateKey(entry.date);
+              entriesByDay.set(key, [...(entriesByDay.get(key) ?? []), entry]);
+            }
 
             return (
               <section
-                key={day.iso}
-                className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200"
+                key={week.id}
+                className={`overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ${
+                  allReviewed && isSubmitted ? "ring-emerald-300" : "ring-slate-200"
+                }`}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-5 py-4">
+                <div className="flex flex-col gap-4 border-b border-slate-200 bg-slate-50 px-5 py-5 lg:flex-row lg:items-center lg:justify-between">
                   <div>
-                    <h2 className="text-lg font-semibold text-slate-900">
-                      {day.name}
-                    </h2>
-                    <div className="text-xs text-slate-500">
-                      {formatShortDate(day.iso)}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-xl font-semibold text-slate-900">{employeeName(week)}</h2>
+                      <StatusBadge status={week.status} />
+                    </div>
+                    <div className="mt-1 text-sm text-slate-600">
+                      Week commencing {formatDate(week.weekStart)}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <div className="text-xs font-semibold text-slate-600">
-                      Approved {reviewedDayCount}/{reviewableDayKeys.length}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => reviewDay(day.iso)}
-                      disabled={
-                        reviewableDayKeys.length === 0 ||
-                        reviewedDayCount === reviewableDayKeys.length
-                      }
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      Approve Today
-                    </button>
+                  <div className="flex flex-wrap gap-2">
+                    <SummaryPill label="Regular" value={fmt2(week.computed.totals.regularHours)} />
+                    <SummaryPill label="Overtime" value={fmt2(week.computed.totals.overtimeTotal)} />
+                    <SummaryPill label="Top-up" value={fmt2(week.computed.totals.businessTopUpHours)} />
+                    <SummaryPill label="Paid" value={fmt2(week.computed.totals.paidHours)} />
                   </div>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[1080px] text-sm">
-                    <thead>
-                      <tr className="border-t border-slate-200 bg-white text-left text-xs font-semibold text-slate-600">
-                        <th className="px-4 py-3">Approval</th>
-                        <th className="px-4 py-3">Employee</th>
-                        <th className="px-4 py-3">Start</th>
-                        <th className="px-4 py-3">Finish</th>
-                        <th className="px-4 py-3">Paid</th>
-                        <th className="px-4 py-3">OT</th>
-                        <th className="px-4 py-3">Jobs / Sites</th>
-                        <th className="px-4 py-3">Overnight</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-4 py-3 text-right">Actions</th>
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {dayRows.map(({ week, entries, computedDay }) => {
-                        const key = rowKey(week.id, day.iso);
-                        const expanded = expandedRows.has(key);
-                        const reviewed = reviewedRows.has(key);
-                        const isNextToReview = key === nextReviewKey;
-                        const canReview =
-                          week.status === "SUBMITTED" && entries.length > 0;
-
-                        const starts = entries
-                          .map((entry) => entry.startTime)
-                          .filter(Boolean);
-                        const finishes = entries
-                          .map((entry) => entry.finishTime)
-                          .filter(Boolean);
-
-                        const overtime =
-                          Number(computedDay?.otMonFriHours || 0) +
-                          Number(computedDay?.otSatHours || 0) +
-                          Number(computedDay?.otSunBhHours || 0);
-
-                        const jobs = [
-                          ...new Set(
-                            entries.map(getEntryLabel).filter(Boolean),
-                          ),
-                        ];
-
-                        const hasLongShift =
-                          Number(computedDay?.workedHours || 0) > 12;
-
-                        const missingTime = entries.some(
-                          (entry) =>
-                            entry.type === "WORK" &&
-                            (!entry.startTime || !entry.finishTime),
-                        );
-
-                        const rowBackground = reviewed
-                          ? "bg-emerald-50/70"
-                          : isNextToReview
-                            ? "bg-cyan-50/70"
-                            : missingTime
-                              ? "bg-red-50/60"
-                              : hasLongShift
-                                ? "bg-amber-50/60"
-                                : "";
-
+                <div className="p-5">
+                  {sortedEntries.length === 0 ? (
+                    <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600 ring-1 ring-slate-200">
+                      No entries recorded for this employee.
+                    </div>
+                  ) : (
+                    <div className="space-y-5">
+                      {Array.from(entriesByDay.entries()).map(([dayIso, dayEntries]) => {
+                        const computedDay = week.computed.days.find((day) => day.date === dayIso);
                         return (
-                          <>
-                            <tr
-                              key={key}
-                              className={`border-t border-slate-200 align-top ${rowBackground}`}
-                            >
-                              <td className="px-4 py-4">
-                                {canReview ? (
-                                  reviewed ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        toggleRow(setReviewedRows, key)
-                                      }
-                                      className="inline-flex items-center rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
-                                      aria-label={`Approved ${employeeName(week)} ${day.name}. Click to undo.`}
-                                    >
-                                      Approved ✓
-                                    </button>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => approveRow(key)}
-                                      className={
-                                        isNextToReview
-                                          ? "inline-flex items-center rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white ring-2 ring-cyan-300 ring-offset-2 hover:bg-cyan-500"
-                                          : "inline-flex items-center rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700"
-                                      }
-                                      aria-label={`Approve ${employeeName(week)} ${day.name}`}
-                                    >
-                                      Approve
-                                    </button>
-                                  )
-                                ) : (
-                                  <span className="text-slate-300">—</span>
-                                )}
-                              </td>
-
-                              <td className="px-4 py-4">
-                                <div className="font-semibold text-slate-900">
-                                  {employeeName(week)}
+                          <div key={dayIso} className="overflow-hidden rounded-2xl ring-1 ring-slate-200">
+                            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-4 py-3">
+                              <div>
+                                <div className="font-semibold text-slate-900">{formatDay(dayIso)}</div>
+                                <div className="mt-0.5 text-xs text-slate-600">
+                                  Worked {fmt2(computedDay?.workedHours)}h · Break {fmt2(computedDay?.breakHours)}h · Paid {fmt2(computedDay?.paidHours)}h
                                 </div>
-                                {hasLongShift ? (
-                                  <div className="mt-1 text-[11px] font-semibold text-amber-700">
-                                    Long shift
-                                  </div>
-                                ) : null}
-                                {missingTime ? (
-                                  <div className="mt-1 text-[11px] font-semibold text-red-700">
-                                    Missing time
-                                  </div>
-                                ) : null}
-                                {isNextToReview ? (
-                                  <div className="mt-1 text-[11px] font-semibold text-cyan-700">
-                                    Next to approve
-                                  </div>
-                                ) : null}
-                              </td>
+                              </div>
+                              {computedDay?.overnightCount ? (
+                                <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                                  Overnight × {computedDay.overnightCount}
+                                </span>
+                              ) : null}
+                            </div>
 
-                              <td className="px-4 py-4 font-medium">
-                                {starts[0] || "—"}
-                              </td>
-                              <td className="px-4 py-4 font-medium">
-                                {finishes.at(-1) || "—"}
-                              </td>
-                              <td className="px-4 py-4 font-semibold">
-                                {fmt2(computedDay?.paidHours)}
-                              </td>
-                              <td className="px-4 py-4">
-                                {overtime > 0 ? fmt2(overtime) : "—"}
-                              </td>
+                            <div className="divide-y divide-slate-200">
+                              {dayEntries.map((entry) => {
+                                const reviewed = reviewedEntries.has(entry.id);
+                                const expanded = expandedEntries.has(entry.id);
+                                const overtime =
+                                  Number(entry.otMonFriHours || 0) +
+                                  Number(entry.otSatHours || 0) +
+                                  Number(entry.otSunBhHours || 0);
+                                const missingTime =
+                                  entry.type === "WORK" && (!entry.startTime || !entry.finishTime);
 
-                              <td className="max-w-[360px] px-4 py-4">
-                                {jobs.length > 0 ? (
-                                  <div className="space-y-1">
-                                    {jobs.map((job) => (
-                                      <div key={job}>{job}</div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <span className="text-slate-400">
-                                    No entry
-                                  </span>
-                                )}
-                              </td>
-
-                              <td className="px-4 py-4">
-                                {computedDay?.overnightCount
-                                  ? `Yes (${computedDay.overnightCount})`
-                                  : "—"}
-                              </td>
-
-                              <td className="px-4 py-4">
-                                <StatusBadge status={week.status} />
-                              </td>
-
-                              <td className="px-4 py-4">
-                                <div className="flex justify-end gap-2">
-                                  {entries.length > 0 ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        toggleRow(setExpandedRows, key)
-                                      }
-                                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
+                                return (
+                                  <Fragment key={entry.id}>
+                                    <div
+                                      className={`grid gap-3 px-4 py-4 lg:grid-cols-[auto_1fr_auto_auto] lg:items-center ${
+                                        reviewed ? "bg-emerald-50/70" : missingTime ? "bg-red-50/60" : "bg-white"
+                                      }`}
                                     >
-                                      {expanded ? "Hide" : "Details"}
-                                    </button>
-                                  ) : null}
-                                </div>
-                              </td>
-                            </tr>
+                                      <div>
+                                        <EntryTypeBadge type={entry.type} />
+                                      </div>
 
-                            {expanded ? (
-                              <tr
-                                key={`${key}:detail`}
-                                className="border-t border-slate-100 bg-slate-50"
-                              >
-                                <td colSpan={10} className="px-5 py-4">
-                                  <div className="grid gap-3 lg:grid-cols-2">
-                                    {entries.map((entry) => {
-                                      const entryOvertime =
-                                        Number(entry.otMonFriHours || 0) +
-                                        Number(entry.otSatHours || 0) +
-                                        Number(entry.otSunBhHours || 0);
-
-                                      return (
-                                        <div
-                                          key={entry.id}
-                                          className="rounded-2xl bg-white p-4 ring-1 ring-slate-200"
-                                        >
-                                          <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                              <EntryTypeBadge type={entry.type} />
-                                              <div className="mt-2 font-semibold text-slate-900">
-                                                {getEntryLabel(entry)}
-                                              </div>
-                                              <div className="mt-1 text-xs text-slate-600">
-                                                {entry.startTime || "—"}–
-                                                {entry.finishTime || "—"}
-                                              </div>
-                                              {entry.description ? (
-                                                <div className="mt-2 text-xs text-slate-600">
-                                                  {entry.description}
-                                                </div>
-                                              ) : null}
-                                            </div>
-
-                                            <div className="text-right">
-                                              <div className="font-semibold text-slate-900">
-                                                {fmt2(entry.hours)}h
-                                              </div>
-                                              <div className="mt-1 text-[11px] text-slate-500">
-                                                Regular{" "}
-                                                {fmt2(entry.regularHours)}
-                                                {entryOvertime > 0
-                                                  ? ` • OT ${fmt2(entryOvertime)}`
-                                                  : ""}
-                                              </div>
-                                              {entry.overnight ? (
-                                                <div className="mt-1 text-[11px] font-semibold text-emerald-700">
-                                                  Overnight
-                                                </div>
-                                              ) : null}
-
-                                              <Link
-                                                href={`/timesheet/entry/${encodeURIComponent(
-                                                  entry.id,
-                                                )}?admin=1&adminWeekId=${encodeURIComponent(
-                                                  week.id,
-                                                )}`}
-                                                className="mt-3 inline-flex rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500"
-                                              >
-                                                Edit
-                                              </Link>
-                                            </div>
-                                          </div>
+                                      <div className="min-w-0">
+                                        <div className="font-semibold text-slate-900">{getEntryLabel(entry)}</div>
+                                        <div className="mt-1 text-xs text-slate-600">
+                                          {entry.startTime || "—"}–{entry.finishTime || "—"}
+                                          <span className="mx-2 text-slate-300">·</span>
+                                          {fmt2(entry.hours)}h
+                                          {overtime > 0 ? ` · OT ${fmt2(overtime)}h` : ""}
+                                          {entry.overnight ? " · Overnight" : ""}
                                         </div>
-                                      );
-                                    })}
-                                  </div>
-                                </td>
-                              </tr>
-                            ) : null}
-                          </>
+                                        {missingTime ? (
+                                          <div className="mt-1 text-xs font-semibold text-red-700">Missing start or finish time</div>
+                                        ) : null}
+                                      </div>
+
+                                      <div className="flex flex-wrap gap-2 lg:justify-end">
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleEntryDetails(entry.id)}
+                                          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                        >
+                                          {expanded ? "Hide details" : "Details"}
+                                        </button>
+
+                                        <Link
+                                          href={`/timesheet/entry/${encodeURIComponent(entry.id)}?admin=1&adminWeekId=${encodeURIComponent(week.id)}&returnTo=${encodeURIComponent(returnTo)}`}
+                                          className="rounded-lg bg-cyan-600 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-500"
+                                        >
+                                          Edit
+                                        </Link>
+                                      </div>
+
+                                      <div className="lg:text-right">
+                                        {isSubmitted ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleEntryReview(entry.id)}
+                                            className={`min-w-[110px] rounded-lg px-3 py-2 text-xs font-semibold ring-1 ${
+                                              reviewed
+                                                ? "bg-emerald-600 text-white ring-emerald-600 hover:bg-emerald-500"
+                                                : "bg-white text-emerald-700 ring-emerald-300 hover:bg-emerald-50"
+                                            }`}
+                                          >
+                                            {reviewed ? "Approved ✓" : "Approve line"}
+                                          </button>
+                                        ) : (
+                                          <span className="text-xs text-slate-400">—</span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {expanded ? (
+                                      <div className="grid gap-3 bg-slate-50 px-4 py-4 sm:grid-cols-4">
+                                        <SummaryPill label="Regular" value={fmt2(entry.regularHours)} />
+                                        <SummaryPill label="OT Mon–Fri" value={fmt2(entry.otMonFriHours)} />
+                                        <SummaryPill label="OT Saturday" value={fmt2(entry.otSatHours)} />
+                                        <SummaryPill label="OT Sunday/BH" value={fmt2(entry.otSunBhHours)} />
+                                        {entry.description ? (
+                                          <div className="sm:col-span-4 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700 ring-1 ring-slate-200">
+                                            <span className="font-semibold">Notes:</span> {entry.description}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
+                                  </Fragment>
+                                );
+                              })}
+                            </div>
+                          </div>
                         );
                       })}
-                    </tbody>
-                  </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className={`border-t px-5 py-5 ${allReviewed && isSubmitted ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-slate-50"}`}>
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <div className="font-semibold text-slate-900">
+                        {reviewedCount} of {sortedEntries.length} lines approved
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600">
+                        {allReviewed
+                          ? "All lines are reviewed. This employee's week is ready for final approval."
+                          : "Approve every line above to unlock final approval for this employee."}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {isSubmitted ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => approveAllEntriesForWeek(week)}
+                            disabled={allReviewed || sortedEntries.length === 0}
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            Approve all lines
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => clearEntriesForWeek(week)}
+                            disabled={reviewedCount === 0}
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            Clear
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => rejectWeek(week)}
+                            disabled={Boolean(acting)}
+                            className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            {acting?.weekId === week.id && acting.action === "REJECT" ? "Rejecting…" : "Reject Week"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => approveWeek(week)}
+                            disabled={!allReviewed || Boolean(acting)}
+                            className="rounded-xl bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {acting?.weekId === week.id && acting.action === "APPROVE" ? "Approving…" : "Approve Week"}
+                          </button>
+                        </>
+                      ) : (
+                        <StatusBadge status={week.status} />
+                      )}
+                    </div>
+                  </div>
                 </div>
               </section>
             );
           })}
         </div>
       )}
-
-      {visibleWeeks.length > 0 ? (
-        <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-          <h2 className="text-lg font-semibold text-slate-900">
-            Employee Week Totals
-          </h2>
-
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm">
-              <thead>
-                <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-600">
-                  <th className="px-4 py-3">Employee</th>
-                  <th className="px-4 py-3">Regular</th>
-                  <th className="px-4 py-3">OT Mon–Fri</th>
-                  <th className="px-4 py-3">OT Sat</th>
-                  <th className="px-4 py-3">OT Sun/BH</th>
-                  <th className="px-4 py-3">Top-up</th>
-                  <th className="px-4 py-3">Paid</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-right">Action</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {visibleWeeks.map((week) => (
-                  <tr key={week.id} className="border-t border-slate-200">
-                    <td className="px-4 py-3 font-semibold">
-                      {employeeName(week)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.regularHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.otMonFriHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.otSatHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.otSunBhHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.businessTopUpHours)}
-                    </td>
-                    <td className="px-4 py-3 font-semibold">
-                      {fmt2(week.computed.totals.paidHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={week.status} />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {week.status === "SUBMITTED" ? (
-                        <button
-                          type="button"
-                          onClick={() => rejectWeek(week)}
-                          disabled={Boolean(acting) || bulkApproving}
-                          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          {acting?.weekId === week.id &&
-                          acting.action === "REJECT"
-                            ? "Rejecting…"
-                            : "Reject Week"}
-                        </button>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-
-      <section className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">Final Approval</h2>
-            <p className="mt-1 text-sm text-slate-300">
-              {reviewableRows.length === 0
-                ? "There are no submitted daily rows to approve."
-                : `${reviewedCount} of ${reviewableRows.length} submitted daily rows approved.`}
-            </p>
-            {!allRowsReviewed && reviewableRows.length > 0 ? (
-              <p className="mt-1 text-xs font-semibold text-amber-300">
-                Approve every submitted row before approving the weeks.
-              </p>
-            ) : null}
-            {nextReviewKey ? (
-              <p className="mt-2 text-xs text-slate-400">
-                Keyboard shortcut: press Enter to approve the highlighted next row.
-              </p>
-            ) : null}
-          </div>
-
-          <button
-            type="button"
-            onClick={approveAllSubmitted}
-            disabled={
-              bulkApproving ||
-              submittedWeeks.length === 0 ||
-              !allRowsReviewed
-            }
-            className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {bulkApproving
-              ? "Approving…"
-              : `Approve All Submitted Weeks (${submittedWeeks.length})`}
-          </button>
-        </div>
-      </section>
     </main>
-  );
-}
-
-function SummaryPill({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="rounded-2xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200">
-      <div className="text-[11px] font-semibold text-slate-500">
-        {label}
-      </div>
-      <div className="mt-1 text-lg font-semibold text-slate-900">
-        {value}
-      </div>
-    </div>
   );
 }
