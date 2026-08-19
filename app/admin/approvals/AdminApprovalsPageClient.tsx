@@ -234,6 +234,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
   const [statusFilter, setStatusFilter] = useState("SUBMITTED");
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<ActingState>(null);
+  const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reviewedEntries, setReviewedEntries] = useState<Set<string>>(new Set());
   const [storageLoaded, setStorageLoaded] = useState(false);
@@ -384,6 +385,47 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
       for (const entry of week.entries) next.delete(entry.id);
       return next;
     });
+  }
+
+  async function deleteEntry(week: ApprovalWeek, entry: ApprovalEntry) {
+    const confirmed = window.confirm(
+      `Delete this timesheet entry?\n\n${formatDay(entry.date)}\n${employeeName(week)}\n${getEntryLabel(entry)}\n${entry.startTime || "—"}–${entry.finishTime || "—"}\n\nThis cannot be undone. The deletion will be recorded in the audit history.`,
+    );
+
+    if (!confirmed) return;
+
+    setError(null);
+    setDeletingEntryId(entry.id);
+
+    try {
+      const response = await fetch("/api/entry/delete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: entry.id }),
+      });
+
+      const data = await readJsonOrText(response);
+      if (!response.ok) {
+        throw new Error((data as { error?: string }).error || "Failed to delete entry");
+      }
+
+      setReviewedEntries((current) => {
+        const next = new Set(current);
+        next.delete(entry.id);
+        return next;
+      });
+      setExpandedEntries((current) => {
+        const next = new Set(current);
+        next.delete(entry.id);
+        return next;
+      });
+
+      window.location.reload();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete entry");
+    } finally {
+      setDeletingEntryId(null);
+    }
   }
 
   async function reviewWeek(week: ApprovalWeek, action: "APPROVE" | "REJECT", reviewComment?: string | null) {
@@ -687,6 +729,16 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                   >
                                     Edit
                                   </Link>
+                                  {isSubmitted ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => deleteEntry(week, entry)}
+                                      disabled={Boolean(acting) || deletingEntryId !== null}
+                                      className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-50"
+                                    >
+                                      {deletingEntryId === entry.id ? "Deleting…" : "Delete"}
+                                    </button>
+                                  ) : null}
                                 </div>
                               </td>
                             </tr>
