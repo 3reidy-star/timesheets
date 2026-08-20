@@ -520,7 +520,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             Weekly Approvals
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Review every person&apos;s times and jobs by day, then approve the
+            Approve every person&apos;s times and jobs by day, then approve the
             submitted weeks together.
           </p>
         </div>
@@ -539,7 +539,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             disabled={reviewableRows.length === 0}
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
           >
-            Review All
+            Approve All Days
           </button>
 
           <button
@@ -548,7 +548,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             disabled={reviewedCount === 0}
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
           >
-            Clear Review
+            Clear Day Approvals
           </button>
         </div>
       </div>
@@ -633,7 +633,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
           <SummaryPill label="Employees" value={visibleWeeks.length} />
           <SummaryPill label="Paid" value={fmt2(totals.paid)} />
           <SummaryPill
-            label="Reviewed"
+            label="Approved"
             value={`${reviewedCount}/${reviewableRows.length}`}
           />
         </div>
@@ -684,7 +684,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
                   <div className="flex items-center gap-3">
                     <div className="text-xs font-semibold text-slate-600">
-                      Reviewed {reviewedDayCount}/{reviewableDayKeys.length}
+                      Approved {reviewedDayCount}/{reviewableDayKeys.length}
                     </div>
                     <button
                       type="button"
@@ -695,7 +695,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                       }
                       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
                     >
-                      Review Today
+                      Approve Day
                     </button>
                   </div>
                 </div>
@@ -704,7 +704,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                   <table className="w-full min-w-[1080px] text-sm">
                     <thead>
                       <tr className="border-t border-slate-200 bg-white text-left text-xs font-semibold text-slate-600">
-                        <th className="px-4 py-3">Reviewed</th>
+                        <th className="px-4 py-3">Approved</th>
                         <th className="px-4 py-3">Employee</th>
                         <th className="px-4 py-3">Start</th>
                         <th className="px-4 py-3">Finish</th>
@@ -774,7 +774,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                     onChange={() =>
                                       toggleRow(setReviewedRows, key)
                                     }
-                                    aria-label={`Reviewed ${employeeName(week)} ${day.name}`}
+                                    aria-label={`Approved ${employeeName(week)} ${day.name}`}
                                     className="h-5 w-5 rounded border-slate-300 text-emerald-600"
                                   />
                                 ) : (
@@ -1027,12 +1027,12 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             <h2 className="text-lg font-semibold">Final Approval</h2>
             <p className="mt-1 text-sm text-slate-300">
               {reviewableRows.length === 0
-                ? "There are no submitted daily rows to review."
-                : `${reviewedCount} of ${reviewableRows.length} submitted daily rows reviewed.`}
+                ? "There are no submitted daily rows to approve."
+                : `${reviewedCount} of ${reviewableRows.length} submitted daily rows approved.`}
             </p>
             {!allRowsReviewed && reviewableRows.length > 0 ? (
               <p className="mt-1 text-xs font-semibold text-amber-300">
-                Review every submitted row before approving the weeks.
+                Approve every submitted daily row before approving the weeks.
               </p>
             ) : null}
           </div>
