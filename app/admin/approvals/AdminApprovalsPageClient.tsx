@@ -306,11 +306,8 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     [visibleWeeks],
   );
 
-  function toggleRow(
-    setter: React.Dispatch<React.SetStateAction<Set<string>>>,
-    key: string,
-  ) {
-    setter((current) => {
+  function toggleExpandedRow(key: string) {
+    setExpandedRows((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -666,6 +663,9 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             const reviewedDayCount = reviewableDayKeys.filter((key) =>
               reviewedRows.has(key),
             ).length;
+            const dayApproved =
+              reviewableDayKeys.length > 0 &&
+              reviewedDayCount === reviewableDayKeys.length;
 
             return (
               <section
@@ -682,29 +682,24 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <div className="text-xs font-semibold text-slate-600">
-                      Approved {reviewedDayCount}/{reviewableDayKeys.length}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => reviewDay(day.iso)}
-                      disabled={
-                        reviewableDayKeys.length === 0 ||
-                        reviewedDayCount === reviewableDayKeys.length
-                      }
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      Approve Day
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => reviewDay(day.iso)}
+                    disabled={reviewableDayKeys.length === 0 || dayApproved}
+                    className={`rounded-lg px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors disabled:cursor-not-allowed ${
+                      dayApproved
+                        ? "bg-emerald-700 disabled:opacity-100"
+                        : "bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100"
+                    }`}
+                  >
+                    {dayApproved ? "Approved ✓" : "Approve Day"}
+                  </button>
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[1080px] text-sm">
+                  <table className="w-full min-w-[1000px] text-sm">
                     <thead>
                       <tr className="border-t border-slate-200 bg-white text-left text-xs font-semibold text-slate-600">
-                        <th className="px-4 py-3">Approved</th>
                         <th className="px-4 py-3">Employee</th>
                         <th className="px-4 py-3">Start</th>
                         <th className="px-4 py-3">Finish</th>
@@ -722,8 +717,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                         const key = rowKey(week.id, day.iso);
                         const expanded = expandedRows.has(key);
                         const reviewed = reviewedRows.has(key);
-                        const canReview =
-                          week.status === "SUBMITTED" && entries.length > 0;
 
                         const starts = entries
                           .map((entry) => entry.startTime)
@@ -766,22 +759,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                               key={key}
                               className={`border-t border-slate-200 align-top ${rowBackground}`}
                             >
-                              <td className="px-4 py-4">
-                                {canReview ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={reviewed}
-                                    onChange={() =>
-                                      toggleRow(setReviewedRows, key)
-                                    }
-                                    aria-label={`Approved ${employeeName(week)} ${day.name}`}
-                                    className="h-5 w-5 rounded border-slate-300 text-emerald-600"
-                                  />
-                                ) : (
-                                  <span className="text-slate-300">—</span>
-                                )}
-                              </td>
-
                               <td className="px-4 py-4">
                                 <div className="font-semibold text-slate-900">
                                   {employeeName(week)}
@@ -840,9 +817,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                   {entries.length > 0 ? (
                                     <button
                                       type="button"
-                                      onClick={() =>
-                                        toggleRow(setExpandedRows, key)
-                                      }
+                                      onClick={() => toggleExpandedRow(key)}
                                       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                                     >
                                       {expanded ? "Hide" : "Details"}
@@ -857,7 +832,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 key={`${key}:detail`}
                                 className="border-t border-slate-100 bg-slate-50"
                               >
-                                <td colSpan={10} className="px-5 py-4">
+                                <td colSpan={9} className="px-5 py-4">
                                   <div className="grid gap-3 lg:grid-cols-2">
                                     {entries.map((entry) => {
                                       const entryOvertime =
