@@ -235,7 +235,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
   const [reviewedRows, setReviewedRows] = useState<Set<string>>(new Set());
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<ActingState>(null);
-  const [bulkApproving, setBulkApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedMonday = useMemo(
@@ -289,9 +288,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     reviewedRows.has(key),
   ).length;
 
-  const allRowsReviewed =
-    reviewableRows.length > 0 && reviewedCount === reviewableRows.length;
-
   const totals = useMemo(
     () =>
       visibleWeeks.reduce(
@@ -315,27 +311,10 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     });
   }
 
-  function reviewAllVisible() {
+  function approvePersonDay(key: string) {
     setReviewedRows((current) => {
       const next = new Set(current);
-      for (const key of reviewableRows) next.add(key);
-      return next;
-    });
-  }
-
-  function clearVisibleReviews() {
-    setReviewedRows((current) => {
-      const next = new Set(current);
-      for (const key of reviewableRows) next.delete(key);
-      return next;
-    });
-  }
-
-  function reviewDay(dayIso: string) {
-    const keys = reviewableRows.filter((key) => key.endsWith(`:${dayIso}`));
-    setReviewedRows((current) => {
-      const next = new Set(current);
-      for (const key of keys) next.add(key);
+      next.add(key);
       return next;
     });
   }
@@ -455,57 +434,15 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     }
   }
 
-  async function approveAllSubmitted() {
-    if (!allRowsReviewed || submittedWeeks.length === 0) return;
-
+  async function approveWeek(week: ApprovalWeek) {
     const confirmed = window.confirm(
-      `Approve ${submittedWeeks.length} submitted timesheet${
-        submittedWeeks.length === 1 ? "" : "s"
-      } for the week commencing ${formatDate(selectedWeekStart)}?`,
+      `Approve ${employeeName(week)}'s week commencing ${formatDate(week.weekStart)}?`,
     );
-
     if (!confirmed) return;
 
-    setError(null);
-    setBulkApproving(true);
-
-    try {
-      for (const week of submittedWeeks) {
-        const response = await fetch("/api/week/review", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            weekId: week.id,
-            action: "APPROVE",
-            comment: comment.trim() || null,
-          }),
-        });
-
-        const data = await readJsonOrText(response);
-
-        if (!response.ok) {
-          throw new Error(
-            (data as { error?: string }).error ||
-              `Failed to approve ${employeeName(week)}`,
-          );
-        }
-
-        setWeeks((current) =>
-          current.map((item) =>
-            item.id === week.id ? { ...item, status: "APPROVED" } : item,
-          ),
-        );
-      }
-
+    const successful = await reviewWeek(week.id, "APPROVE", comment);
+    if (successful) {
       setComment("");
-    } catch (bulkError) {
-      setError(
-        bulkError instanceof Error
-          ? bulkError.message
-          : "Failed to approve submitted weeks",
-      );
-    } finally {
-      setBulkApproving(false);
     }
   }
 
@@ -517,8 +454,8 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             Weekly Approvals
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Approve every person&apos;s times and jobs by day, then approve the
-            submitted weeks together.
+            Approve each person&apos;s individual days, then approve that
+            person&apos;s week at the bottom.
           </p>
         </div>
 
@@ -530,23 +467,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             Detailed Timesheets
           </Link>
 
-          <button
-            type="button"
-            onClick={reviewAllVisible}
-            disabled={reviewableRows.length === 0}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Approve All Days
-          </button>
-
-          <button
-            type="button"
-            onClick={clearVisibleReviews}
-            disabled={reviewedCount === 0}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Clear Day Approvals
-          </button>
         </div>
       </div>
 
@@ -663,10 +583,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             const reviewedDayCount = reviewableDayKeys.filter((key) =>
               reviewedRows.has(key),
             ).length;
-            const dayApproved =
-              reviewableDayKeys.length > 0 &&
-              reviewedDayCount === reviewableDayKeys.length;
-
             return (
               <section
                 key={day.iso}
@@ -682,24 +598,16 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => reviewDay(day.iso)}
-                    disabled={reviewableDayKeys.length === 0 || dayApproved}
-                    className={`rounded-lg px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors disabled:cursor-not-allowed ${
-                      dayApproved
-                        ? "bg-emerald-700 disabled:opacity-100"
-                        : "bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-300 disabled:text-slate-500 disabled:opacity-100"
-                    }`}
-                  >
-                    {dayApproved ? "Approved ✓" : "Approve Day"}
-                  </button>
+                  <div className="text-xs font-semibold text-slate-600">
+                    Approved {reviewedDayCount}/{reviewableDayKeys.length}
+                  </div>
                 </div>
 
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[1000px] text-sm">
                     <thead>
                       <tr className="border-t border-slate-200 bg-white text-left text-xs font-semibold text-slate-600">
+                        <th className="px-4 py-3">Day approval</th>
                         <th className="px-4 py-3">Employee</th>
                         <th className="px-4 py-3">Start</th>
                         <th className="px-4 py-3">Finish</th>
@@ -717,6 +625,8 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                         const key = rowKey(week.id, day.iso);
                         const expanded = expandedRows.has(key);
                         const reviewed = reviewedRows.has(key);
+                        const canApproveDay =
+                          week.status === "SUBMITTED" && entries.length > 0;
 
                         const starts = entries
                           .map((entry) => entry.startTime)
@@ -759,6 +669,25 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                               key={key}
                               className={`border-t border-slate-200 align-top ${rowBackground}`}
                             >
+                              <td className="px-4 py-4">
+                                {canApproveDay ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => approvePersonDay(key)}
+                                    disabled={reviewed}
+                                    className={`min-w-[112px] rounded-lg px-3 py-2 text-xs font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-100 ${
+                                      reviewed
+                                        ? "bg-emerald-700"
+                                        : "bg-emerald-500 hover:bg-emerald-400"
+                                    }`}
+                                  >
+                                    {reviewed ? "Approved ✓" : "Approve Day"}
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-300">—</span>
+                                )}
+                              </td>
+
                               <td className="px-4 py-4">
                                 <div className="font-semibold text-slate-900">
                                   {employeeName(week)}
@@ -832,7 +761,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 key={`${key}:detail`}
                                 className="border-t border-slate-100 bg-slate-50"
                               >
-                                <td colSpan={9} className="px-5 py-4">
+                                <td colSpan={10} className="px-5 py-4">
                                   <div className="grid gap-3 lg:grid-cols-2">
                                     {entries.map((entry) => {
                                       const entryOvertime =
@@ -933,101 +862,109 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
               </thead>
 
               <tbody>
-                {visibleWeeks.map((week) => (
-                  <tr key={week.id} className="border-t border-slate-200">
-                    <td className="px-4 py-3 font-semibold">
-                      {employeeName(week)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.regularHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.otMonFriHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.otSatHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.otSunBhHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmt2(week.computed.totals.businessTopUpHours)}
-                    </td>
-                    <td className="px-4 py-3 font-semibold">
-                      {fmt2(week.computed.totals.paidHours)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={week.status} />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {week.status === "SUBMITTED" ? (
-                        <button
-                          type="button"
-                          onClick={() => rejectWeek(week)}
-                          disabled={Boolean(acting) || bulkApproving}
-                          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          {acting?.weekId === week.id &&
-                          acting.action === "REJECT"
-                            ? "Rejecting…"
-                            : "Reject Week"}
-                        </button>
-                      ) : week.status === "APPROVED" ? (
-                        <button
-                          type="button"
-                          onClick={() => reopenWeek(week)}
-                          disabled={Boolean(acting) || bulkApproving}
-                          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                        >
-                          {acting?.weekId === week.id &&
-                          acting.action === "REOPEN"
-                            ? "Reopening…"
-                            : "Reopen Week"}
-                        </button>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {visibleWeeks.map((week) => {
+                  const weekDayKeys = days
+                    .filter((day) =>
+                      week.entries.some(
+                        (entry) => dateKey(entry.date) === day.iso,
+                      ),
+                    )
+                    .map((day) => rowKey(week.id, day.iso));
+                  const approvedDayCount = weekDayKeys.filter((key) =>
+                    reviewedRows.has(key),
+                  ).length;
+                  const allWeekDaysApproved =
+                    weekDayKeys.length > 0 &&
+                    approvedDayCount === weekDayKeys.length;
+
+                  return (
+                    <tr key={week.id} className="border-t border-slate-200">
+                      <td className="px-4 py-3">
+                        <div className="font-semibold">
+                          {employeeName(week)}
+                        </div>
+                        {week.status === "SUBMITTED" ? (
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            {approvedDayCount} of {weekDayKeys.length} days approved
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">
+                        {fmt2(week.computed.totals.regularHours)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {fmt2(week.computed.totals.otMonFriHours)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {fmt2(week.computed.totals.otSatHours)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {fmt2(week.computed.totals.otSunBhHours)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {fmt2(week.computed.totals.businessTopUpHours)}
+                      </td>
+                      <td className="px-4 py-3 font-semibold">
+                        {fmt2(week.computed.totals.paidHours)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={week.status} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap justify-end gap-2">
+                          {week.status === "SUBMITTED" ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => rejectWeek(week)}
+                                disabled={Boolean(acting)}
+                                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                              >
+                                {acting?.weekId === week.id &&
+                                acting.action === "REJECT"
+                                  ? "Rejecting…"
+                                  : "Reject Week"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => approveWeek(week)}
+                                disabled={
+                                  !allWeekDaysApproved || Boolean(acting)
+                                }
+                                className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {acting?.weekId === week.id &&
+                                acting.action === "APPROVE"
+                                  ? "Approving…"
+                                  : "Approve Week"}
+                              </button>
+                            </>
+                          ) : week.status === "APPROVED" ? (
+                            <button
+                              type="button"
+                              onClick={() => reopenWeek(week)}
+                              disabled={Boolean(acting)}
+                              className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                            >
+                              {acting?.weekId === week.id &&
+                              acting.action === "REOPEN"
+                                ? "Reopening…"
+                                : "Reopen Week"}
+                            </button>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </section>
       ) : null}
 
-      <section className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">Final Approval</h2>
-            <p className="mt-1 text-sm text-slate-300">
-              {reviewableRows.length === 0
-                ? "There are no submitted daily rows to approve."
-                : `${reviewedCount} of ${reviewableRows.length} submitted daily rows approved.`}
-            </p>
-            {!allRowsReviewed && reviewableRows.length > 0 ? (
-              <p className="mt-1 text-xs font-semibold text-amber-300">
-                Approve every submitted daily row before approving the weeks.
-              </p>
-            ) : null}
-          </div>
-
-          <button
-            type="button"
-            onClick={approveAllSubmitted}
-            disabled={
-              bulkApproving ||
-              submittedWeeks.length === 0 ||
-              !allRowsReviewed
-            }
-            className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {bulkApproving
-              ? "Approving…"
-              : `Approve All Submitted Weeks (${submittedWeeks.length})`}
-          </button>
-        </div>
-      </section>
     </main>
   );
 }
