@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 export type ApprovalEntry = {
   id: string;
@@ -67,7 +67,15 @@ type ActingState = {
   action: "APPROVE" | "REJECT";
 } | null;
 
-const REVIEWED_STORAGE_KEY = "admin-approvals-reviewed-entry-ids";
+const DAY_NAMES = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
 
 function dateKey(value: string) {
   return value.slice(0, 10);
@@ -94,6 +102,12 @@ function startOfWeekMonday(dateInput: Date) {
   return date;
 }
 
+function addDays(dateInput: Date, days: number) {
+  const date = new Date(dateInput);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
 function addWeeks(value: string, amount: number) {
   const date = parseLocalDate(value);
   date.setDate(date.getDate() + amount * 7);
@@ -104,9 +118,8 @@ function formatDate(value: string) {
   return parseLocalDate(value).toLocaleDateString("en-GB");
 }
 
-function formatDay(value: string) {
+function formatShortDate(value: string) {
   return parseLocalDate(value).toLocaleDateString("en-GB", {
-    weekday: "long",
     day: "2-digit",
     month: "short",
   });
@@ -142,20 +155,13 @@ function getEntryLabel(entry: ApprovalEntry) {
   return entry.job?.trim() || entry.description?.trim() || displayType(entry.type);
 }
 
-function comparisonKey(entry: ApprovalEntry) {
-  if (entry.type.toUpperCase() !== "WORK") {
-    return `other:${entry.type.toUpperCase()}:${getEntryLabel(entry).toLocaleLowerCase()}`;
-  }
-
-  return `work:${getEntryLabel(entry).replace(/\s+/g, " ").trim().toLocaleLowerCase()}`;
-}
-
-function timeSignature(entry: ApprovalEntry) {
-  return `${entry.startTime || "—"}|${entry.finishTime || "—"}|${fmt2(entry.hours)}`;
+function rowKey(weekId: string, dayIso: string) {
+  return `${weekId}:${dayIso}`;
 }
 
 function StatusBadge({ status }: { status: string }) {
   const normalised = status.toUpperCase();
+
   const className =
     normalised === "SUBMITTED"
       ? "bg-blue-50 text-blue-800 ring-blue-200"
@@ -166,7 +172,9 @@ function StatusBadge({ status }: { status: string }) {
           : "bg-amber-50 text-amber-800 ring-amber-200";
 
   return (
-    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${className}`}>
+    <span
+      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${className}`}
+    >
       {normalised}
     </span>
   );
@@ -174,6 +182,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function EntryTypeBadge({ type }: { type: string }) {
   const normalised = type.toUpperCase();
+
   const className =
     normalised === "WORK"
       ? "bg-cyan-50 text-cyan-800 ring-cyan-200"
@@ -186,156 +195,102 @@ function EntryTypeBadge({ type }: { type: string }) {
             : "bg-slate-50 text-slate-700 ring-slate-200";
 
   return (
-    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${className}`}>
+    <span
+      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${className}`}
+    >
       {displayType(type).toUpperCase()}
     </span>
   );
 }
 
-function SummaryPill({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-2xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200">
-      <div className="text-[11px] font-semibold text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-slate-900">{value}</div>
-    </div>
-  );
-}
-
 async function readJsonOrText(response: Response) {
   const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return response.json();
-  return { error: (await response.text()).slice(0, 1200) };
-}
 
-function safeReadReviewedEntries() {
-  if (typeof window === "undefined") return new Set<string>();
-
-  try {
-    const raw = window.sessionStorage.getItem(REVIEWED_STORAGE_KEY);
-    if (!raw) return new Set<string>();
-    const values = JSON.parse(raw);
-    return new Set(Array.isArray(values) ? values.filter((value) => typeof value === "string") : []);
-  } catch {
-    return new Set<string>();
+  if (contentType.includes("application/json")) {
+    return response.json();
   }
+
+  return { error: (await response.text()).slice(0, 1200) };
 }
 
 export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
   const currentMonday = formatInputDate(startOfWeekMonday(new Date()));
+
   const availableWeekStarts = useMemo(
-    () => Array.from(new Set(initialWeeks.map((week) => dateKey(week.weekStart)))).sort((a, b) => b.localeCompare(a)),
+    () =>
+      Array.from(
+        new Set(initialWeeks.map((week) => dateKey(week.weekStart))),
+      ).sort((a, b) => b.localeCompare(a)),
     [initialWeeks],
   );
 
   const [weeks, setWeeks] = useState(initialWeeks);
   const [selectedWeekStart, setSelectedWeekStart] = useState(
-    availableWeekStarts.includes(currentMonday) ? currentMonday : availableWeekStarts[0] || currentMonday,
+    availableWeekStarts.includes(currentMonday)
+      ? currentMonday
+      : availableWeekStarts[0] || currentMonday,
   );
-  const [statusFilter, setStatusFilter] = useState("SUBMITTED");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [reviewedRows, setReviewedRows] = useState<Set<string>>(new Set());
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<ActingState>(null);
-  const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
+  const [bulkApproving, setBulkApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reviewedEntries, setReviewedEntries] = useState<Set<string>>(new Set());
-  const [storageLoaded, setStorageLoaded] = useState(false);
-  const [expandedEntries, setExpandedEntries] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    setReviewedEntries(safeReadReviewedEntries());
-    setStorageLoaded(true);
-  }, []);
+  const selectedMonday = useMemo(
+    () => parseLocalDate(selectedWeekStart),
+    [selectedWeekStart],
+  );
 
-  useEffect(() => {
-    if (!storageLoaded || typeof window === "undefined") return;
-    window.sessionStorage.setItem(REVIEWED_STORAGE_KEY, JSON.stringify(Array.from(reviewedEntries)));
-  }, [reviewedEntries, storageLoaded]);
+  const days = useMemo(
+    () =>
+      DAY_NAMES.map((name, index) => {
+        const date = addDays(selectedMonday, index);
+        return { name, iso: formatInputDate(date) };
+      }),
+    [selectedMonday],
+  );
 
   const visibleWeeks = useMemo(
     () =>
       weeks
         .filter((week) => dateKey(week.weekStart) === selectedWeekStart)
-        .filter((week) => statusFilter === "ALL" || week.status === statusFilter)
+        .filter(
+          (week) => statusFilter === "ALL" || week.status === statusFilter,
+        )
         .sort((a, b) => employeeName(a).localeCompare(employeeName(b))),
     [weeks, selectedWeekStart, statusFilter],
   );
 
-  const reviewDays = useMemo(() => {
-    const dayMap = new Map<
-      string,
-      Array<{ week: ApprovalWeek; entry: ApprovalEntry; employee: string }>
-    >();
+  const submittedWeeks = visibleWeeks.filter(
+    (week) => week.status === "SUBMITTED",
+  );
 
-    for (const week of visibleWeeks) {
-      for (const entry of week.entries) {
-        const dayIso = dateKey(entry.date);
-        dayMap.set(dayIso, [
-          ...(dayMap.get(dayIso) ?? []),
-          { week, entry, employee: employeeName(week) },
-        ]);
+  const reviewableRows = useMemo(() => {
+    const keys: string[] = [];
+
+    for (const week of submittedWeeks) {
+      for (const day of days) {
+        const hasEntry = week.entries.some(
+          (entry) => dateKey(entry.date) === day.iso,
+        );
+
+        if (hasEntry) {
+          keys.push(rowKey(week.id, day.iso));
+        }
       }
     }
 
-    return Array.from(dayMap.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([dayIso, rows]) => {
-        const jobMap = new Map<string, typeof rows>();
+    return keys;
+  }, [submittedWeeks, days]);
 
-        for (const row of rows) {
-          const key = comparisonKey(row.entry);
-          jobMap.set(key, [...(jobMap.get(key) ?? []), row]);
-        }
+  const reviewedCount = reviewableRows.filter((key) =>
+    reviewedRows.has(key),
+  ).length;
 
-        const comparisonByEntry = new Map<string, "MATCH" | "DIFF" | "SINGLE">();
-        let mismatchCount = 0;
-
-        for (const jobRows of jobMap.values()) {
-          const employeeCount = new Set(jobRows.map((row) => row.week.user.id)).size;
-          const comparable =
-            employeeCount > 1 &&
-            jobRows.every((row) => row.entry.type.toUpperCase() === "WORK");
-          const mismatch =
-            comparable && new Set(jobRows.map((row) => timeSignature(row.entry))).size > 1;
-
-          if (mismatch) mismatchCount += 1;
-          for (const row of jobRows) {
-            comparisonByEntry.set(
-              row.entry.id,
-              comparable ? (mismatch ? "DIFF" : "MATCH") : "SINGLE",
-            );
-          }
-        }
-
-        const sortedRows = rows.slice().sort((a, b) => {
-          const jobCompare = getEntryLabel(a.entry).localeCompare(getEntryLabel(b.entry));
-          if (jobCompare !== 0) return jobCompare;
-          const employeeCompare = a.employee.localeCompare(b.employee);
-          if (employeeCompare !== 0) return employeeCompare;
-          return (a.entry.startTime || "").localeCompare(b.entry.startTime || "");
-        });
-
-        const staffCount = new Set(rows.map((row) => row.week.user.id)).size;
-        const reviewedCount = rows.filter((row) => reviewedEntries.has(row.entry.id)).length;
-        const paidHours = Array.from(
-          new Map(rows.map((row) => [row.week.id, row.week])).values(),
-        ).reduce((sum, week) => {
-          const computedDay = week.computed.days.find((day) => day.date === dayIso);
-          return sum + Number(computedDay?.paidHours || 0);
-        }, 0);
-
-        return {
-          dayIso,
-          rows: sortedRows.map((row) => ({
-            ...row,
-            comparison: comparisonByEntry.get(row.entry.id) ?? "SINGLE",
-          })),
-          jobCount: jobMap.size,
-          staffCount,
-          reviewedCount,
-          paidHours,
-          mismatchCount,
-        };
-      });
-  }, [reviewedEntries, visibleWeeks]);
+  const allRowsReviewed =
+    reviewableRows.length > 0 && reviewedCount === reviewableRows.length;
 
   const totals = useMemo(
     () =>
@@ -351,135 +306,92 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     [visibleWeeks],
   );
 
-  const daysWithDifferences = reviewDays.filter((day) => day.mismatchCount > 0).length;
-
-  function toggleEntryReview(entryId: string) {
-    setReviewedEntries((current) => {
+  function toggleRow(
+    setter: React.Dispatch<React.SetStateAction<Set<string>>>,
+    key: string,
+  ) {
+    setter((current) => {
       const next = new Set(current);
-      if (next.has(entryId)) next.delete(entryId);
-      else next.add(entryId);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
 
-  function toggleEntryDetails(entryId: string) {
-    setExpandedEntries((current) => {
+  function reviewAllVisible() {
+    setReviewedRows((current) => {
       const next = new Set(current);
-      if (next.has(entryId)) next.delete(entryId);
-      else next.add(entryId);
+      for (const key of reviewableRows) next.add(key);
       return next;
     });
   }
 
-  function approveAllEntriesForWeek(week: ApprovalWeek) {
-    setReviewedEntries((current) => {
+  function clearVisibleReviews() {
+    setReviewedRows((current) => {
       const next = new Set(current);
-      for (const entry of week.entries) next.add(entry.id);
+      for (const key of reviewableRows) next.delete(key);
       return next;
     });
   }
 
-  function clearEntriesForWeek(week: ApprovalWeek) {
-    setReviewedEntries((current) => {
+  function reviewDay(dayIso: string) {
+    const keys = reviewableRows.filter((key) => key.endsWith(`:${dayIso}`));
+    setReviewedRows((current) => {
       const next = new Set(current);
-      for (const entry of week.entries) next.delete(entry.id);
+      for (const key of keys) next.add(key);
       return next;
     });
   }
 
-  async function deleteEntry(week: ApprovalWeek, entry: ApprovalEntry) {
-    const confirmed = window.confirm(
-      `Delete this timesheet entry?\n\n${formatDay(entry.date)}\n${employeeName(week)}\n${getEntryLabel(entry)}\n${entry.startTime || "—"}–${entry.finishTime || "—"}\n\nThis cannot be undone. The deletion will be recorded in the audit history.`,
-    );
-
-    if (!confirmed) return;
-
+  async function reviewWeek(
+    weekId: string,
+    action: "APPROVE" | "REJECT",
+    reviewComment?: string | null,
+  ) {
     setError(null);
-    setDeletingEntryId(entry.id);
-
-    try {
-      const response = await fetch("/api/entry/delete", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: entry.id }),
-      });
-
-      const data = await readJsonOrText(response);
-      if (!response.ok) {
-        throw new Error((data as { error?: string }).error || "Failed to delete entry");
-      }
-
-      setReviewedEntries((current) => {
-        const next = new Set(current);
-        next.delete(entry.id);
-        return next;
-      });
-      setExpandedEntries((current) => {
-        const next = new Set(current);
-        next.delete(entry.id);
-        return next;
-      });
-
-      window.location.reload();
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete entry");
-    } finally {
-      setDeletingEntryId(null);
-    }
-  }
-
-  async function reviewWeek(week: ApprovalWeek, action: "APPROVE" | "REJECT", reviewComment?: string | null) {
-    setError(null);
-    setActing({ weekId: week.id, action });
+    setActing({ weekId, action });
 
     try {
       const response = await fetch("/api/week/review", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          weekId: week.id,
+          weekId,
           action,
           comment: reviewComment?.trim() || null,
         }),
       });
 
       const data = await readJsonOrText(response);
+
       if (!response.ok) {
-        throw new Error((data as { error?: string }).error || "Failed to review week");
+        throw new Error(
+          (data as { error?: string }).error || "Failed to review week",
+        );
       }
 
       setWeeks((current) =>
-        current.map((item) =>
-          item.id === week.id ? { ...item, status: action === "APPROVE" ? "APPROVED" : "DRAFT" } : item,
+        current.map((week) =>
+          week.id === weekId
+            ? {
+                ...week,
+                status: action === "APPROVE" ? "APPROVED" : "DRAFT",
+              }
+            : week,
         ),
       );
 
-      clearEntriesForWeek(week);
-      setComment("");
       return true;
     } catch (reviewError) {
-      setError(reviewError instanceof Error ? reviewError.message : "Failed to review week");
+      setError(
+        reviewError instanceof Error
+          ? reviewError.message
+          : "Failed to review week",
+      );
       return false;
     } finally {
       setActing(null);
     }
-  }
-
-  async function approveWeek(week: ApprovalWeek) {
-    const reviewedCount = week.entries.filter((entry) => reviewedEntries.has(entry.id)).length;
-    const allReviewed = week.entries.length > 0 && reviewedCount === week.entries.length;
-
-    if (!allReviewed) {
-      setError(`Approve all ${week.entries.length} line${week.entries.length === 1 ? "" : "s"} for ${employeeName(week)} before approving the week.`);
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Approve ${employeeName(week)}'s week commencing ${formatDate(week.weekStart)}?`,
-    );
-    if (!confirmed) return;
-
-    await reviewWeek(week, "APPROVE", comment);
   }
 
   async function rejectWeek(week: ApprovalWeek) {
@@ -487,31 +399,123 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
       `Why is ${employeeName(week)}'s timesheet being rejected?`,
       comment,
     );
+
     if (rejectionComment === null) return;
+
     if (!rejectionComment.trim()) {
       setError("A rejection comment is required.");
       return;
     }
 
-    await reviewWeek(week, "REJECT", rejectionComment);
+    const successful = await reviewWeek(
+      week.id,
+      "REJECT",
+      rejectionComment,
+    );
+
+    if (successful) {
+      setComment("");
+      setReviewedRows((current) => {
+        const next = new Set(current);
+        for (const day of days) next.delete(rowKey(week.id, day.iso));
+        return next;
+      });
+    }
+  }
+
+  async function approveAllSubmitted() {
+    if (!allRowsReviewed || submittedWeeks.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Approve ${submittedWeeks.length} submitted timesheet${
+        submittedWeeks.length === 1 ? "" : "s"
+      } for the week commencing ${formatDate(selectedWeekStart)}?`,
+    );
+
+    if (!confirmed) return;
+
+    setError(null);
+    setBulkApproving(true);
+
+    try {
+      for (const week of submittedWeeks) {
+        const response = await fetch("/api/week/review", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            weekId: week.id,
+            action: "APPROVE",
+            comment: comment.trim() || null,
+          }),
+        });
+
+        const data = await readJsonOrText(response);
+
+        if (!response.ok) {
+          throw new Error(
+            (data as { error?: string }).error ||
+              `Failed to approve ${employeeName(week)}`,
+          );
+        }
+
+        setWeeks((current) =>
+          current.map((item) =>
+            item.id === week.id ? { ...item, status: "APPROVED" } : item,
+          ),
+        );
+      }
+
+      setComment("");
+    } catch (bulkError) {
+      setError(
+        bulkError instanceof Error
+          ? bulkError.message
+          : "Failed to approve submitted weeks",
+      );
+    } finally {
+      setBulkApproving(false);
+    }
   }
 
   return (
     <main className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Daily Approvals</h1>
+          <h1 className="text-2xl font-semibold text-slate-900">
+            Weekly Approvals
+          </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Compare everyone on the same job, day by day, then approve each completed employee week.
+            Review every person&apos;s times and jobs by day, then approve the
+            submitted weeks together.
           </p>
         </div>
 
-        <Link
-          href="/admin/timesheets"
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50"
-        >
-          Detailed Timesheets
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/admin/timesheets"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50"
+          >
+            Detailed Timesheets
+          </Link>
+
+          <button
+            type="button"
+            onClick={reviewAllVisible}
+            disabled={reviewableRows.length === 0}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Review All
+          </button>
+
+          <button
+            type="button"
+            onClick={clearVisibleReviews}
+            disabled={reviewedCount === 0}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Clear Review
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -520,28 +524,40 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </div>
       ) : null}
 
-      <section className="grid gap-4 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:grid-cols-[1.2fr_1fr_1.3fr]">
+      <section className="grid gap-4 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:grid-cols-[1fr_1fr_1fr_1.2fr]">
         <div>
-          <label className="block text-xs font-semibold text-slate-600">Week commencing Monday</label>
+          <label className="block text-xs font-semibold text-slate-600">
+            Week commencing Monday
+          </label>
           <div className="mt-1 flex gap-2">
             <button
               type="button"
-              onClick={() => setSelectedWeekStart((current) => addWeeks(current, -1))}
+              onClick={() =>
+                setSelectedWeekStart((current) => addWeeks(current, -1))
+              }
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
             >
               ←
             </button>
+
             <input
               type="date"
               value={selectedWeekStart}
               onChange={(event) =>
-                setSelectedWeekStart(formatInputDate(startOfWeekMonday(parseLocalDate(event.target.value))))
+                setSelectedWeekStart(
+                  formatInputDate(
+                    startOfWeekMonday(parseLocalDate(event.target.value)),
+                  ),
+                )
               }
               className="min-w-0 flex-1 rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
             />
+
             <button
               type="button"
-              onClick={() => setSelectedWeekStart((current) => addWeeks(current, 1))}
+              onClick={() =>
+                setSelectedWeekStart((current) => addWeeks(current, 1))
+              }
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold hover:bg-slate-50"
             >
               →
@@ -550,14 +566,16 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </div>
 
         <label>
-          <span className="block text-xs font-semibold text-slate-600">Status</span>
+          <span className="block text-xs font-semibold text-slate-600">
+            Status
+          </span>
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
             className="mt-1 w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
           >
-            <option value="SUBMITTED">Submitted</option>
             <option value="ALL">All statuses</option>
+            <option value="SUBMITTED">Submitted</option>
             <option value="APPROVED">Approved</option>
             <option value="DRAFT">Draft</option>
             <option value="REJECTED">Rejected</option>
@@ -565,7 +583,9 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </label>
 
         <label>
-          <span className="block text-xs font-semibold text-slate-600">Approval comment</span>
+          <span className="block text-xs font-semibold text-slate-600">
+            Approval comment
+          </span>
           <input
             value={comment}
             onChange={(event) => setComment(event.target.value)}
@@ -573,13 +593,15 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             className="mt-1 w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
           />
         </label>
-      </section>
 
-      <section className="grid gap-3 sm:grid-cols-4">
-        <SummaryPill label="Employees" value={visibleWeeks.length} />
-        <SummaryPill label="Paid hours" value={fmt2(totals.paid)} />
-        <SummaryPill label="Days to review" value={reviewDays.length} />
-        <SummaryPill label="Days with differences" value={daysWithDifferences} />
+        <div className="grid grid-cols-3 gap-2">
+          <SummaryPill label="Employees" value={visibleWeeks.length} />
+          <SummaryPill label="Paid" value={fmt2(totals.paid)} />
+          <SummaryPill
+            label="Reviewed"
+            value={`${reviewedCount}/${reviewableRows.length}`}
+          />
+        </div>
       </section>
 
       {visibleWeeks.length === 0 ? (
@@ -588,155 +610,207 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
         </section>
       ) : (
         <div className="space-y-6">
-          <section className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-950">
-            Each row shows the date, employee, job and the exact start and finish times entered.
-            Rows are sorted by job so employees on the same job appear together.
-          </section>
+          {days.map((day) => {
+            const dayRows = visibleWeeks.map((week) => {
+              const entries = week.entries.filter(
+                (entry) => dateKey(entry.date) === day.iso,
+              );
+              const computedDay = week.computed.days.find(
+                (item) => item.date === day.iso,
+              );
+              return { week, entries, computedDay };
+            });
 
-          {reviewDays.length === 0 ? (
-            <section className="rounded-3xl bg-white p-8 text-center text-sm text-slate-600 shadow-sm ring-1 ring-slate-200">
-              These employee weeks do not contain any entries.
-            </section>
-          ) : (
-            reviewDays.map((day) => (
+            const reviewableDayKeys = dayRows
+              .filter(
+                ({ week, entries }) =>
+                  week.status === "SUBMITTED" && entries.length > 0,
+              )
+              .map(({ week }) => rowKey(week.id, day.iso));
+
+            const reviewedDayCount = reviewableDayKeys.filter((key) =>
+              reviewedRows.has(key),
+            ).length;
+
+            return (
               <section
-                key={day.dayIso}
-                className={`overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ${
-                  day.mismatchCount > 0 ? "ring-amber-300" : "ring-slate-200"
-                }`}
+                key={day.iso}
+                className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200"
               >
-                <div className="flex flex-col gap-4 border-b border-slate-200 bg-slate-900 px-5 py-5 text-white lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-5 py-4">
                   <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-xl font-semibold">{formatDay(day.dayIso)}</h2>
-                      {day.mismatchCount > 0 ? (
-                        <span className="rounded-full bg-amber-300 px-2.5 py-1 text-xs font-bold text-amber-950">
-                          {day.mismatchCount} job{day.mismatchCount === 1 ? "" : "s"} with different times
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-emerald-400 px-2.5 py-1 text-xs font-bold text-emerald-950">
-                          No differences found
-                        </span>
-                      )}
+                    <h2 className="text-lg font-semibold text-slate-900">
+                      {day.name}
+                    </h2>
+                    <div className="text-xs text-slate-500">
+                      {formatShortDate(day.iso)}
                     </div>
-                    <p className="mt-1 text-sm text-slate-300">
-                      {day.staffCount} {day.staffCount === 1 ? "person" : "people"} · {day.jobCount}{" "}
-                      {day.jobCount === 1 ? "job / entry type" : "jobs / entry types"} · {fmt2(day.paidHours)} paid hours
-                    </p>
                   </div>
 
-                  <div className="text-sm font-semibold text-slate-200">
-                    {day.reviewedCount} of {day.rows.length} lines reviewed
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs font-semibold text-slate-600">
+                      Reviewed {reviewedDayCount}/{reviewableDayKeys.length}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => reviewDay(day.iso)}
+                      disabled={
+                        reviewableDayKeys.length === 0 ||
+                        reviewedDayCount === reviewableDayKeys.length
+                      }
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Review Today
+                    </button>
                   </div>
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="min-w-[1120px] w-full border-collapse text-left text-sm">
-                    <thead className="bg-slate-100 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      <tr>
-                        <th className="px-4 py-3">Date</th>
+                  <table className="w-full min-w-[1080px] text-sm">
+                    <thead>
+                      <tr className="border-t border-slate-200 bg-white text-left text-xs font-semibold text-slate-600">
+                        <th className="px-4 py-3">Reviewed</th>
                         <th className="px-4 py-3">Employee</th>
-                        <th className="px-4 py-3">Job</th>
                         <th className="px-4 py-3">Start</th>
                         <th className="px-4 py-3">Finish</th>
-                        <th className="px-4 py-3 text-right">Hours</th>
-                        <th className="px-4 py-3">Review</th>
+                        <th className="px-4 py-3">Paid</th>
+                        <th className="px-4 py-3">OT</th>
+                        <th className="px-4 py-3">Jobs / Sites</th>
+                        <th className="px-4 py-3">Overnight</th>
+                        <th className="px-4 py-3">Status</th>
                         <th className="px-4 py-3 text-right">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {day.rows.map(({ week, entry, employee, comparison }) => {
-                        const reviewed = reviewedEntries.has(entry.id);
-                        const expanded = expandedEntries.has(entry.id);
-                        const isSubmitted = week.status === "SUBMITTED";
-                        const missingTime =
-                          entry.type.toUpperCase() === "WORK" && (!entry.startTime || !entry.finishTime);
-                        const returnTo = `/admin/approvals?weekStart=${encodeURIComponent(selectedWeekStart)}`;
+
+                    <tbody>
+                      {dayRows.map(({ week, entries, computedDay }) => {
+                        const key = rowKey(week.id, day.iso);
+                        const expanded = expandedRows.has(key);
+                        const reviewed = reviewedRows.has(key);
+                        const canReview =
+                          week.status === "SUBMITTED" && entries.length > 0;
+
+                        const starts = entries
+                          .map((entry) => entry.startTime)
+                          .filter(Boolean);
+                        const finishes = entries
+                          .map((entry) => entry.finishTime)
+                          .filter(Boolean);
+
+                        const overtime =
+                          Number(computedDay?.otMonFriHours || 0) +
+                          Number(computedDay?.otSatHours || 0) +
+                          Number(computedDay?.otSunBhHours || 0);
+
+                        const jobs = [
+                          ...new Set(
+                            entries.map(getEntryLabel).filter(Boolean),
+                          ),
+                        ];
+
+                        const hasLongShift =
+                          Number(computedDay?.workedHours || 0) > 12;
+
+                        const missingTime = entries.some(
+                          (entry) =>
+                            entry.type === "WORK" &&
+                            (!entry.startTime || !entry.finishTime),
+                        );
+
+                        const rowBackground = reviewed
+                          ? "bg-emerald-50/60"
+                          : missingTime
+                            ? "bg-red-50/60"
+                            : hasLongShift
+                              ? "bg-amber-50/60"
+                              : "";
 
                         return (
-                          <Fragment key={entry.id}>
+                          <>
                             <tr
-                              className={
-                                reviewed
-                                  ? "bg-emerald-50/70"
-                                  : missingTime
-                                    ? "bg-red-50/70"
-                                    : comparison === "DIFF"
-                                      ? "bg-amber-50/60"
-                                      : "bg-white"
-                              }
+                              key={key}
+                              className={`border-t border-slate-200 align-top ${rowBackground}`}
                             >
-                              <td className="whitespace-nowrap px-4 py-4 font-semibold text-slate-900">
-                                {formatDate(day.dayIso)}
-                              </td>
                               <td className="px-4 py-4">
-                                <div className="font-semibold text-slate-900">{employee}</div>
-                                <div className="mt-1"><StatusBadge status={week.status} /></div>
-                              </td>
-                              <td className="px-4 py-4">
-                                <div className="font-semibold text-slate-900">{getEntryLabel(entry)}</div>
-                                <div className="mt-1 flex flex-wrap items-center gap-2">
-                                  <EntryTypeBadge type={entry.type} />
-                                  {comparison === "DIFF" ? (
-                                    <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-950 ring-1 ring-amber-300">
-                                      Times differ
-                                    </span>
-                                  ) : comparison === "MATCH" ? (
-                                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 ring-1 ring-emerald-200">
-                                      Times match
-                                    </span>
-                                  ) : null}
-                                </div>
-                              </td>
-                              <td className="whitespace-nowrap px-4 py-4 font-mono text-base font-semibold text-slate-900">
-                                {entry.startTime || "—"}
-                              </td>
-                              <td className="whitespace-nowrap px-4 py-4 font-mono text-base font-semibold text-slate-900">
-                                {entry.finishTime || "—"}
-                              </td>
-                              <td className="whitespace-nowrap px-4 py-4 text-right text-base font-semibold text-slate-900">
-                                {fmt2(entry.hours)}h
-                              </td>
-                              <td className="px-4 py-4">
-                                {isSubmitted ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleEntryReview(entry.id)}
-                                    className={`min-w-[110px] rounded-lg px-3 py-2 text-xs font-semibold ring-1 ${
-                                      reviewed
-                                        ? "bg-emerald-600 text-white ring-emerald-600 hover:bg-emerald-500"
-                                        : "bg-white text-emerald-700 ring-emerald-300 hover:bg-emerald-50"
-                                    }`}
-                                  >
-                                    {reviewed ? "Approved ✓" : "Approve line"}
-                                  </button>
+                                {canReview ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={reviewed}
+                                    onChange={() =>
+                                      toggleRow(setReviewedRows, key)
+                                    }
+                                    aria-label={`Reviewed ${employeeName(week)} ${day.name}`}
+                                    className="h-5 w-5 rounded border-slate-300 text-emerald-600"
+                                  />
                                 ) : (
-                                  <StatusBadge status={week.status} />
+                                  <span className="text-slate-300">—</span>
                                 )}
                               </td>
+
+                              <td className="px-4 py-4">
+                                <div className="font-semibold text-slate-900">
+                                  {employeeName(week)}
+                                </div>
+                                {hasLongShift ? (
+                                  <div className="mt-1 text-[11px] font-semibold text-amber-700">
+                                    Long shift
+                                  </div>
+                                ) : null}
+                                {missingTime ? (
+                                  <div className="mt-1 text-[11px] font-semibold text-red-700">
+                                    Missing time
+                                  </div>
+                                ) : null}
+                              </td>
+
+                              <td className="px-4 py-4 font-medium">
+                                {starts[0] || "—"}
+                              </td>
+                              <td className="px-4 py-4 font-medium">
+                                {finishes.at(-1) || "—"}
+                              </td>
+                              <td className="px-4 py-4 font-semibold">
+                                {fmt2(computedDay?.paidHours)}
+                              </td>
+                              <td className="px-4 py-4">
+                                {overtime > 0 ? fmt2(overtime) : "—"}
+                              </td>
+
+                              <td className="max-w-[360px] px-4 py-4">
+                                {jobs.length > 0 ? (
+                                  <div className="space-y-1">
+                                    {jobs.map((job) => (
+                                      <div key={job}>{job}</div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400">
+                                    No entry
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="px-4 py-4">
+                                {computedDay?.overnightCount
+                                  ? `Yes (${computedDay.overnightCount})`
+                                  : "—"}
+                              </td>
+
+                              <td className="px-4 py-4">
+                                <StatusBadge status={week.status} />
+                              </td>
+
                               <td className="px-4 py-4">
                                 <div className="flex justify-end gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleEntryDetails(entry.id)}
-                                    className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                                  >
-                                    {expanded ? "Hide details" : "Details"}
-                                  </button>
-                                  <Link
-                                    href={`/timesheet/entry/${encodeURIComponent(entry.id)}?admin=1&adminWeekId=${encodeURIComponent(week.id)}&returnTo=${encodeURIComponent(returnTo)}`}
-                                    className="rounded-lg bg-cyan-600 px-3 py-2 text-xs font-semibold text-white hover:bg-cyan-500"
-                                  >
-                                    Edit
-                                  </Link>
-                                  {isSubmitted ? (
+                                  {entries.length > 0 ? (
                                     <button
                                       type="button"
-                                      onClick={() => deleteEntry(week, entry)}
-                                      disabled={Boolean(acting) || deletingEntryId !== null}
-                                      className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-50"
+                                      onClick={() =>
+                                        toggleRow(setExpandedRows, key)
+                                      }
+                                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                                     >
-                                      {deletingEntryId === entry.id ? "Deleting…" : "Delete"}
+                                      {expanded ? "Hide" : "Details"}
                                     </button>
                                   ) : null}
                                 </div>
@@ -744,129 +818,213 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                             </tr>
 
                             {expanded ? (
-                              <tr className="bg-slate-50">
-                                <td colSpan={8} className="px-4 py-4">
-                                  <div className="grid gap-3 sm:grid-cols-4">
-                                    <SummaryPill label="Regular" value={fmt2(entry.regularHours)} />
-                                    <SummaryPill label="OT Mon–Fri" value={fmt2(entry.otMonFriHours)} />
-                                    <SummaryPill label="OT Saturday" value={fmt2(entry.otSatHours)} />
-                                    <SummaryPill label="OT Sunday/BH" value={fmt2(entry.otSunBhHours)} />
-                                    {entry.description ? (
-                                      <div className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-700 ring-1 ring-slate-200 sm:col-span-4">
-                                        <span className="font-semibold">Notes:</span> {entry.description}
-                                      </div>
-                                    ) : null}
+                              <tr
+                                key={`${key}:detail`}
+                                className="border-t border-slate-100 bg-slate-50"
+                              >
+                                <td colSpan={10} className="px-5 py-4">
+                                  <div className="grid gap-3 lg:grid-cols-2">
+                                    {entries.map((entry) => {
+                                      const entryOvertime =
+                                        Number(entry.otMonFriHours || 0) +
+                                        Number(entry.otSatHours || 0) +
+                                        Number(entry.otSunBhHours || 0);
+
+                                      return (
+                                        <div
+                                          key={entry.id}
+                                          className="rounded-2xl bg-white p-4 ring-1 ring-slate-200"
+                                        >
+                                          <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                              <EntryTypeBadge type={entry.type} />
+                                              <div className="mt-2 font-semibold text-slate-900">
+                                                {getEntryLabel(entry)}
+                                              </div>
+                                              <div className="mt-1 text-xs text-slate-600">
+                                                {entry.startTime || "—"}–
+                                                {entry.finishTime || "—"}
+                                              </div>
+                                              {entry.description ? (
+                                                <div className="mt-2 text-xs text-slate-600">
+                                                  {entry.description}
+                                                </div>
+                                              ) : null}
+                                            </div>
+
+                                            <div className="text-right">
+                                              <div className="font-semibold text-slate-900">
+                                                {fmt2(entry.hours)}h
+                                              </div>
+                                              <div className="mt-1 text-[11px] text-slate-500">
+                                                Regular{" "}
+                                                {fmt2(entry.regularHours)}
+                                                {entryOvertime > 0
+                                                  ? ` • OT ${fmt2(entryOvertime)}`
+                                                  : ""}
+                                              </div>
+                                              {entry.overnight ? (
+                                                <div className="mt-1 text-[11px] font-semibold text-emerald-700">
+                                                  Overnight
+                                                </div>
+                                              ) : null}
+
+                                              <Link
+                                                href={`/timesheet/entry/${encodeURIComponent(
+                                                  entry.id,
+                                                )}?admin=1&adminWeekId=${encodeURIComponent(
+                                                  week.id,
+                                                )}`}
+                                                className="mt-3 inline-flex rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500"
+                                              >
+                                                Edit
+                                              </Link>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </td>
                               </tr>
                             ) : null}
-                          </Fragment>
+                          </>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
               </section>
-            ))
-          )}
-
-          <section className="overflow-hidden rounded-3xl bg-slate-900 text-white shadow-sm ring-1 ring-slate-800">
-            <div className="border-b border-slate-700 px-5 py-5">
-              <h2 className="text-xl font-semibold">Final weekly approval</h2>
-              <p className="mt-1 text-sm text-slate-300">
-                Once every line is reviewed above, approve each employee's week. Approved employees leave the submitted list automatically.
-              </p>
-            </div>
-
-            <div className="divide-y divide-slate-700">
-              {visibleWeeks.map((week) => {
-                const reviewedCount = week.entries.filter((entry) => reviewedEntries.has(entry.id)).length;
-                const allReviewed = week.entries.length > 0 && reviewedCount === week.entries.length;
-                const isSubmitted = week.status === "SUBMITTED";
-
-                return (
-                  <div
-                    key={week.id}
-                    className={`grid gap-4 px-5 py-5 xl:grid-cols-[minmax(180px,1fr)_minmax(260px,1.4fr)_auto] xl:items-center ${
-                      allReviewed && isSubmitted ? "bg-emerald-950/40" : ""
-                    }`}
-                  >
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="font-semibold">{employeeName(week)}</h3>
-                        <StatusBadge status={week.status} />
-                      </div>
-                      <div className="mt-1 text-xs text-slate-400">
-                        {fmt2(week.computed.totals.paidHours)} paid · {fmt2(week.computed.totals.overtimeTotal)} overtime
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between gap-3 text-sm">
-                        <span className="font-semibold">
-                          {reviewedCount} of {week.entries.length} lines reviewed
-                        </span>
-                        <span className={allReviewed ? "text-emerald-300" : "text-slate-400"}>
-                          {allReviewed ? "Ready" : "Review outstanding"}
-                        </span>
-                      </div>
-                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-700">
-                        <div
-                          className="h-full rounded-full bg-emerald-400 transition-all"
-                          style={{
-                            width: `${week.entries.length === 0 ? 0 : (reviewedCount / week.entries.length) * 100}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 xl:justify-end">
-                      {isSubmitted ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => approveAllEntriesForWeek(week)}
-                            disabled={allReviewed || week.entries.length === 0}
-                            className="rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-40"
-                          >
-                            Approve all lines
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => clearEntriesForWeek(week)}
-                            disabled={reviewedCount === 0}
-                            className="rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-40"
-                          >
-                            Clear
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => rejectWeek(week)}
-                            disabled={Boolean(acting)}
-                            className="rounded-xl border border-red-400/50 bg-red-950/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-900/50 disabled:opacity-40"
-                          >
-                            {acting?.weekId === week.id && acting.action === "REJECT" ? "Rejecting…" : "Reject Week"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => approveWeek(week)}
-                            disabled={!allReviewed || Boolean(acting)}
-                            className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold text-emerald-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-35"
-                          >
-                            {acting?.weekId === week.id && acting.action === "APPROVE" ? "Approving…" : "Approve Week"}
-                          </button>
-                        </>
-                      ) : (
-                        <StatusBadge status={week.status} />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+            );
+          })}
         </div>
       )}
+
+      {visibleWeeks.length > 0 ? (
+        <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+          <h2 className="text-lg font-semibold text-slate-900">
+            Employee Week Totals
+          </h2>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead>
+                <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-600">
+                  <th className="px-4 py-3">Employee</th>
+                  <th className="px-4 py-3">Regular</th>
+                  <th className="px-4 py-3">OT Mon–Fri</th>
+                  <th className="px-4 py-3">OT Sat</th>
+                  <th className="px-4 py-3">OT Sun/BH</th>
+                  <th className="px-4 py-3">Top-up</th>
+                  <th className="px-4 py-3">Paid</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">Action</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {visibleWeeks.map((week) => (
+                  <tr key={week.id} className="border-t border-slate-200">
+                    <td className="px-4 py-3 font-semibold">
+                      {employeeName(week)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {fmt2(week.computed.totals.regularHours)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {fmt2(week.computed.totals.otMonFriHours)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {fmt2(week.computed.totals.otSatHours)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {fmt2(week.computed.totals.otSunBhHours)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {fmt2(week.computed.totals.businessTopUpHours)}
+                    </td>
+                    <td className="px-4 py-3 font-semibold">
+                      {fmt2(week.computed.totals.paidHours)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={week.status} />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {week.status === "SUBMITTED" ? (
+                        <button
+                          type="button"
+                          onClick={() => rejectWeek(week)}
+                          disabled={Boolean(acting) || bulkApproving}
+                          className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          {acting?.weekId === week.id &&
+                          acting.action === "REJECT"
+                            ? "Rejecting…"
+                            : "Reject Week"}
+                        </button>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="rounded-3xl bg-slate-900 p-6 text-white shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Final Approval</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              {reviewableRows.length === 0
+                ? "There are no submitted daily rows to review."
+                : `${reviewedCount} of ${reviewableRows.length} submitted daily rows reviewed.`}
+            </p>
+            {!allRowsReviewed && reviewableRows.length > 0 ? (
+              <p className="mt-1 text-xs font-semibold text-amber-300">
+                Review every submitted row before approving the weeks.
+              </p>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={approveAllSubmitted}
+            disabled={
+              bulkApproving ||
+              submittedWeeks.length === 0 ||
+              !allRowsReviewed
+            }
+            className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {bulkApproving
+              ? "Approving…"
+              : `Approve All Submitted Weeks (${submittedWeeks.length})`}
+          </button>
+        </div>
+      </section>
     </main>
+  );
+}
+
+function SummaryPill({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-2xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200">
+      <div className="text-[11px] font-semibold text-slate-500">
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-semibold text-slate-900">
+        {value}
+      </div>
+    </div>
   );
 }

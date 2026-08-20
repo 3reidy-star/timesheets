@@ -36,7 +36,7 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     const weekId = getString(body?.weekId);
-    const action = getString(body?.action).toUpperCase(); // APPROVE | REJECT
+    const action = getString(body?.action).toUpperCase(); // APPROVE | REJECT | REOPEN
     const commentRaw = getString(body?.comment);
     const comment = commentRaw ? commentRaw : null;
 
@@ -44,16 +44,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "weekId is required" }, { status: 400 });
     }
 
-    if (action !== "APPROVE" && action !== "REJECT") {
+    if (action !== "APPROVE" && action !== "REJECT" && action !== "REOPEN") {
       return NextResponse.json(
-        { error: "action must be APPROVE or REJECT" },
+        { error: "action must be APPROVE, REJECT or REOPEN" },
         { status: 400 }
       );
     }
 
-    if (action === "REJECT" && !comment) {
+    if ((action === "REJECT" || action === "REOPEN") && !comment) {
       return NextResponse.json(
-        { error: "Comment is required when rejecting a week." },
+        { error: `Comment is required when ${action === "REOPEN" ? "reopening" : "rejecting"} a week.` },
         { status: 400 }
       );
     }
@@ -67,7 +67,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Week not found" }, { status: 404 });
     }
 
-    if (week.status !== "SUBMITTED") {
+    if (action === "REOPEN" && week.status !== "APPROVED") {
+      return NextResponse.json(
+        { error: `Week is ${week.status} and cannot be reopened.` },
+        { status: 400 }
+      );
+    }
+
+    if (action !== "REOPEN" && week.status !== "SUBMITTED") {
       return NextResponse.json(
         { error: `Week is ${week.status} and cannot be reviewed.` },
         { status: 400 }
@@ -76,9 +83,17 @@ export async function POST(req: Request) {
 
     // Policy:
     // - approve locks
-    // - reject returns to draft for editing
+    // - reject returns a submitted week to draft for editing
+    // - reopen returns an approved week to draft for correction and resubmission
     const newStatus = action === "APPROVE" ? "APPROVED" : "DRAFT";
-    const auditAction = action === "APPROVE" ? "APPROVED" : "REJECTED";
+    const auditAction =
+      action === "APPROVE"
+        ? "APPROVED"
+        : action === "REJECT"
+          ? "REJECTED"
+          : "EDITED";
+    const auditComment =
+      action === "REOPEN" ? `Approved week reopened: ${comment}` : comment;
 
     const result = await prisma.$transaction(async (tx) => {
       const updated = await tx.timesheetWeek.update({
@@ -87,11 +102,23 @@ export async function POST(req: Request) {
         select: { id: true, status: true, weekStart: true },
       });
 
+      if (action !== "APPROVE") {
+        await tx.dayApproval.updateMany({
+          where: { weekId },
+          data: {
+            status: "PENDING",
+            comment: null,
+            reviewedById: null,
+            reviewedAt: null,
+          },
+        });
+      }
+
       await tx.weekAudit.create({
         data: {
           weekId,
           action: auditAction as any,
-          comment,
+          comment: auditComment,
           performedById: reviewer.id,
         },
       });
