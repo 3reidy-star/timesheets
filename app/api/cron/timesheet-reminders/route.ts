@@ -6,7 +6,10 @@ import { prisma } from "@/app/lib/prisma";
 
 const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
 const SENDER_EMAIL = "operations@pfgbltd.com";
-const RECIPIENT_EMAIL = "operations@pfgbltd.com";
+const RECIPIENT_EMAILS = [
+  "operations@pfgbltd.com",
+  "craig@pfgbltd.com",
+];
 
 type OutstandingTimesheet = {
   name: string;
@@ -285,13 +288,11 @@ async function sendSummaryEmail(
             contentType: "HTML",
             content: buildEmailHtml(weekStart, outstanding),
           },
-          toRecipients: [
-            {
-              emailAddress: {
-                address: RECIPIENT_EMAIL,
-              },
+          toRecipients: RECIPIENT_EMAILS.map((address) => ({
+            emailAddress: {
+              address,
             },
-          ],
+          })),
         },
         saveToSentItems: true,
       }),
