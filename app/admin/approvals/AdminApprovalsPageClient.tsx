@@ -64,7 +64,7 @@ type Props = {
 
 type ActingState = {
   weekId: string;
-  action: "APPROVE" | "REJECT";
+  action: "APPROVE" | "REJECT" | "REOPEN";
 } | null;
 
 const DAY_NAMES = [
@@ -345,7 +345,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
   async function reviewWeek(
     weekId: string,
-    action: "APPROVE" | "REJECT",
+    action: "APPROVE" | "REJECT" | "REOPEN",
     reviewComment?: string | null,
   ) {
     setError(null);
@@ -411,6 +411,41 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
       week.id,
       "REJECT",
       rejectionComment,
+    );
+
+    if (successful) {
+      setComment("");
+      setReviewedRows((current) => {
+        const next = new Set(current);
+        for (const day of days) next.delete(rowKey(week.id, day.iso));
+        return next;
+      });
+    }
+  }
+
+  async function reopenWeek(week: ApprovalWeek) {
+    const reopenComment = window.prompt(
+      `Why is ${employeeName(week)}'s approved timesheet being reopened?`,
+      comment,
+    );
+
+    if (reopenComment === null) return;
+
+    if (!reopenComment.trim()) {
+      setError("A reason is required when reopening an approved week.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Reopen ${employeeName(week)}'s week commencing ${formatDate(week.weekStart)}?\n\nThe week will return to Draft so it can be corrected and resubmitted.`,
+    );
+
+    if (!confirmed) return;
+
+    const successful = await reviewWeek(
+      week.id,
+      "REOPEN",
+      reopenComment,
     );
 
     if (successful) {
@@ -961,6 +996,18 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                           acting.action === "REJECT"
                             ? "Rejecting…"
                             : "Reject Week"}
+                        </button>
+                      ) : week.status === "APPROVED" ? (
+                        <button
+                          type="button"
+                          onClick={() => reopenWeek(week)}
+                          disabled={Boolean(acting) || bulkApproving}
+                          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          {acting?.weekId === week.id &&
+                          acting.action === "REOPEN"
+                            ? "Reopening…"
+                            : "Reopen Week"}
                         </button>
                       ) : (
                         "—"
