@@ -102,18 +102,6 @@ export async function POST(req: Request) {
         select: { id: true, status: true, weekStart: true },
       });
 
-      if (action !== "APPROVE") {
-        await tx.dayApproval.updateMany({
-          where: { weekId },
-          data: {
-            status: "PENDING",
-            comment: null,
-            reviewedById: null,
-            reviewedAt: null,
-          },
-        });
-      }
-
       await tx.weekAudit.create({
         data: {
           weekId,
