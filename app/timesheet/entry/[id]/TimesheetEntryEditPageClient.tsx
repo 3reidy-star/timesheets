@@ -39,6 +39,8 @@ export const dynamic = "force-dynamic";
 
 const BREAK_THRESHOLD_HOURS = 8;
 const BREAK_HOURS = 0.5;
+const TIME_INCREMENT_MINUTES = 15;
+const TIME_INCREMENT_SECONDS = TIME_INCREMENT_MINUTES * 60;
 
 async function readJsonOrText(r: Response) {
   const ct = r.headers.get("content-type") || "";
@@ -63,6 +65,11 @@ function parseHHMMStrict(value: string) {
   const mm = Number(m[2]);
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
+}
+
+function isQuarterHourTime(value: string) {
+  const minutes = parseHHMMStrict(value);
+  return minutes !== null && minutes % TIME_INCREMENT_MINUTES === 0;
 }
 
 function round2(n: number) {
@@ -355,7 +362,23 @@ export default function TimesheetEntryEditPageClient() {
   const isWork = type === "WORK";
   const isHalfHoliday = type === "HOLIDAY_HALF";
   const isDraft = entryWeek?.status === "DRAFT";
-const canEdit = isDraft || adminMode;
+  const canEdit = isDraft || adminMode;
+  const hasQuarterHourTimes =
+    !isWork || (isQuarterHourTime(startTime) && isQuarterHourTime(finishTime));
+
+  function handleDateChange(nextDateIso: string) {
+    if (isWork && dateIso && nextDateIso) {
+      const previousStandard = standardTimesForDate(dateIso);
+      const nextStandard = standardTimesForDate(nextDateIso);
+
+      // Keep an explicitly chosen finish time when moving the entry to another day.
+      if (finishTime === previousStandard.finish) {
+        setFinishTime(nextStandard.finish);
+      }
+    }
+
+    setDateIso(nextDateIso);
+  }
 
   async function loadEntry() {
     if (!entryId) {
@@ -491,19 +514,25 @@ const canEdit = isDraft || adminMode;
     !!dateIso &&
     isLikelyEarlyFinish(dateIso, finishTime);
 
- const canSave =
-  !!entryWeek &&
-  canEdit &&
-  !!dateIso &&
-  preview.ok &&
-  (!isWork || !!job.trim()) &&
-  !saving;
+  const canSave =
+    !!entryWeek &&
+    canEdit &&
+    !!dateIso &&
+    preview.ok &&
+    hasQuarterHourTimes &&
+    (!isWork || !!job.trim()) &&
+    !saving;
 
   async function saveChanges() {
     if (!entryWeek) return;
 
     if (!canEdit) {
       setErr("Week is locked and cannot be modified.");
+      return;
+    }
+
+    if (!hasQuarterHourTimes) {
+      setErr("Start and finish times must use 15-minute increments.");
       return;
     }
 
@@ -664,7 +693,7 @@ const canEdit = isDraft || adminMode;
             <input
               type="date"
               value={dateIso}
-              onChange={(e) => setDateIso(e.target.value)}
+              onChange={(e) => handleDateChange(e.target.value)}
               className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
             />
             <div className="mt-2 text-sm text-slate-600">
@@ -719,6 +748,7 @@ const canEdit = isDraft || adminMode;
                 <Label>Start Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
                   className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
@@ -729,6 +759,7 @@ const canEdit = isDraft || adminMode;
                 <Label>Finish Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={finishTime}
                   onChange={(e) => setFinishTime(e.target.value)}
                   className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
@@ -741,6 +772,7 @@ const canEdit = isDraft || adminMode;
                 <Label>Start Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={startTime}
                   readOnly
                   className="mt-2 w-full rounded-2xl bg-slate-50 px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200"
@@ -751,6 +783,7 @@ const canEdit = isDraft || adminMode;
                 <Label>Finish Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={finishTime}
                   readOnly
                   className="mt-2 w-full rounded-2xl bg-slate-50 px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200"
@@ -758,6 +791,21 @@ const canEdit = isDraft || adminMode;
               </div>
             </div>
           )}
+
+          {isWork ? (
+            <div
+              className={`text-sm ${
+                hasQuarterHourTimes ? "text-slate-600" : "font-semibold text-red-700"
+              }`}
+            >
+              Start and finish times must be in 15-minute increments.
+              {dateIso && new Date(`${dateIso}T00:00:00`).getDay() === 5 ? (
+                <span className="mt-1 block">
+                  Friday normally finishes at 14:00. Change the finish time if an override is needed.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {isWork ? (
             <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">

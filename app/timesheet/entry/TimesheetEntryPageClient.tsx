@@ -9,6 +9,8 @@ type HalfDay = "AM" | "PM";
 
 const BREAK_THRESHOLD_HOURS = 8;
 const BREAK_HOURS = 0.5;
+const TIME_INCREMENT_MINUTES = 15;
+const TIME_INCREMENT_SECONDS = TIME_INCREMENT_MINUTES * 60;
 
 async function readJsonOrText(r: Response) {
   const ct = r.headers.get("content-type") || "";
@@ -33,6 +35,11 @@ function parseHHMMStrict(value: string) {
   const mm = Number(m[2]);
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
+}
+
+function isQuarterHourTime(value: string) {
+  const minutes = parseHHMMStrict(value);
+  return minutes !== null && minutes % TIME_INCREMENT_MINUTES === 0;
 }
 
 function round2(n: number) {
@@ -329,7 +336,9 @@ export default function TimesheetEntryPageClient() {
   const [dateIso, setDateIso] = useState(isoDateFromWeekStart(weekStart));
   const [job, setJob] = useState("");
   const [startTime, setStartTime] = useState("08:30");
-  const [finishTime, setFinishTime] = useState("17:00");
+  const [finishTime, setFinishTime] = useState(
+    () => standardTimesForDate(isoDateFromWeekStart(weekStart)).finish
+  );
   const [overnight, setOvernight] = useState(false);
   const [leftEarlyByChoice, setLeftEarlyByChoice] = useState(false);
   const [jobAndKnock, setJobAndKnock] = useState(false);
@@ -339,6 +348,22 @@ export default function TimesheetEntryPageClient() {
 
   const isWork = type === "WORK";
   const isHalfHoliday = type === "HOLIDAY_HALF";
+  const hasQuarterHourTimes =
+    !isWork || (isQuarterHourTime(startTime) && isQuarterHourTime(finishTime));
+
+  function handleDateChange(nextDateIso: string) {
+    if (isWork && nextDateIso) {
+      const previousStandard = standardTimesForDate(dateIso);
+      const nextStandard = standardTimesForDate(nextDateIso);
+
+      // Keep an explicitly chosen finish time when moving the entry to another day.
+      if (finishTime === previousStandard.finish) {
+        setFinishTime(nextStandard.finish);
+      }
+    }
+
+    setDateIso(nextDateIso);
+  }
 
   useEffect(() => {
     if (!dateIso && weekStart) {
@@ -433,9 +458,15 @@ export default function TimesheetEntryPageClient() {
     !!dateIso &&
     isLikelyEarlyFinish(dateIso, finishTime);
 
-  const canSave = !!dateIso && preview.ok && (!isWork || !!job.trim()) && !saving;
+  const canSave =
+    !!dateIso && preview.ok && hasQuarterHourTimes && (!isWork || !!job.trim()) && !saving;
 
   async function createEntry() {
+    if (!hasQuarterHourTimes) {
+      setErr("Start and finish times must use 15-minute increments.");
+      return;
+    }
+
     if (!canSave) {
       setErr("Please complete the required fields.");
       return;
@@ -537,7 +568,7 @@ export default function TimesheetEntryPageClient() {
             <input
               type="date"
               value={dateIso}
-              onChange={(e) => setDateIso(e.target.value)}
+              onChange={(e) => handleDateChange(e.target.value)}
               className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
             />
             <div className="mt-2 text-sm text-slate-600">
@@ -592,6 +623,7 @@ export default function TimesheetEntryPageClient() {
                 <Label>Start Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
                   className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
@@ -602,6 +634,7 @@ export default function TimesheetEntryPageClient() {
                 <Label>Finish Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={finishTime}
                   onChange={(e) => setFinishTime(e.target.value)}
                   className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
@@ -614,6 +647,7 @@ export default function TimesheetEntryPageClient() {
                 <Label>Start Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={startTime}
                   readOnly
                   className="mt-2 w-full rounded-2xl bg-slate-50 px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200"
@@ -624,6 +658,7 @@ export default function TimesheetEntryPageClient() {
                 <Label>Finish Time</Label>
                 <input
                   type="time"
+                  step={TIME_INCREMENT_SECONDS}
                   value={finishTime}
                   readOnly
                   className="mt-2 w-full rounded-2xl bg-slate-50 px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200"
@@ -631,6 +666,21 @@ export default function TimesheetEntryPageClient() {
               </div>
             </div>
           )}
+
+          {isWork ? (
+            <div
+              className={`text-sm ${
+                hasQuarterHourTimes ? "text-slate-600" : "font-semibold text-red-700"
+              }`}
+            >
+              Start and finish times must be in 15-minute increments.
+              {dateIso && new Date(`${dateIso}T00:00:00`).getDay() === 5 ? (
+                <span className="mt-1 block">
+                  Friday normally finishes at 14:00. Change the finish time if an override is needed.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {isWork ? (
             <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
