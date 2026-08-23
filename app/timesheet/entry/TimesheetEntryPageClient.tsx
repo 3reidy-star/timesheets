@@ -10,7 +10,15 @@ type HalfDay = "AM" | "PM";
 const BREAK_THRESHOLD_HOURS = 8;
 const BREAK_HOURS = 0.5;
 const TIME_INCREMENT_MINUTES = 15;
-const TIME_INCREMENT_SECONDS = TIME_INCREMENT_MINUTES * 60;
+const TIME_OPTIONS = Array.from(
+  { length: (24 * 60) / TIME_INCREMENT_MINUTES },
+  (_, index) => {
+    const totalMinutes = index * TIME_INCREMENT_MINUTES;
+    const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0");
+    const minutes = String(totalMinutes % 60).padStart(2, "0");
+    return `${hours}:${minutes}`;
+  }
+);
 
 async function readJsonOrText(r: Response) {
   const ct = r.headers.get("content-type") || "";
@@ -621,24 +629,42 @@ export default function TimesheetEntryPageClient() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Start Time</Label>
-                <input
-                  type="time"
-                  step={TIME_INCREMENT_SECONDS}
+                <select
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
                   className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
-                />
+                >
+                  {!isQuarterHourTime(startTime) ? (
+                    <option value={startTime} disabled>
+                      {startTime} — choose a valid time
+                    </option>
+                  ) : null}
+                  {TIME_OPTIONS.map((time) => (
+                    <option key={time} value={time}>
+                      {time}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
                 <Label>Finish Time</Label>
-                <input
-                  type="time"
-                  step={TIME_INCREMENT_SECONDS}
+                <select
                   value={finishTime}
                   onChange={(e) => setFinishTime(e.target.value)}
                   className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
-                />
+                >
+                  {!isQuarterHourTime(finishTime) ? (
+                    <option value={finishTime} disabled>
+                      {finishTime} — choose a valid time
+                    </option>
+                  ) : null}
+                  {TIME_OPTIONS.map((time) => (
+                    <option key={time} value={time}>
+                      {time}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           ) : (
@@ -646,8 +672,7 @@ export default function TimesheetEntryPageClient() {
               <div>
                 <Label>Start Time</Label>
                 <input
-                  type="time"
-                  step={TIME_INCREMENT_SECONDS}
+                  type="text"
                   value={startTime}
                   readOnly
                   className="mt-2 w-full rounded-2xl bg-slate-50 px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200"
@@ -657,8 +682,7 @@ export default function TimesheetEntryPageClient() {
               <div>
                 <Label>Finish Time</Label>
                 <input
-                  type="time"
-                  step={TIME_INCREMENT_SECONDS}
+                  type="text"
                   value={finishTime}
                   readOnly
                   className="mt-2 w-full rounded-2xl bg-slate-50 px-4 py-3 text-base text-slate-900 ring-1 ring-slate-200"
