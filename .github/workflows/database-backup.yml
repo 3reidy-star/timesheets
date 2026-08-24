@@ -1,0 +1,225 @@
+name: Daily Encrypted Database Backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+      timezone: "Europe/London"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-backup-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Create and verify encrypted PostgreSQL backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+      CLOUDFLARE_R2_ENDPOINT: ${{ secrets.CLOUDFLARE_R2_ENDPOINT }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      CLOUDFLARE_R2_BUCKET: pfgb-database-backups
+
+    steps:
+      - name: Validate backup configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "${BACKUP_DATABASE_URL:-}" ]]; then
+            echo "::error::Missing GitHub Actions secret BACKUP_DATABASE_URL."
+            exit 1
+          fi
+
+          if [[ "$BACKUP_DATABASE_URL" == *"-pooler."* ]]; then
+            echo "::error::BACKUP_DATABASE_URL must be Neon's direct connection string, with Connection pooling switched off."
+            exit 1
+          fi
+
+          if [[ ${#BACKUP_ENCRYPTION_KEY} -lt 32 ]]; then
+            echo "::error::BACKUP_ENCRYPTION_KEY must contain at least 32 characters."
+            exit 1
+          fi
+
+          if [[ -z "${CLOUDFLARE_R2_ENDPOINT:-}" ]]; then
+            echo "::error::Missing GitHub Actions secret CLOUDFLARE_R2_ENDPOINT."
+            exit 1
+          fi
+
+          if [[ ! "$CLOUDFLARE_R2_ENDPOINT" =~ ^https://[[:alnum:].-]+\.r2\.cloudflarestorage\.com/?$ ]]; then
+            echo "::error::CLOUDFLARE_R2_ENDPOINT must be the HTTPS S3 endpoint shown by Cloudflare."
+            exit 1
+          fi
+
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" ]]; then
+            echo "::error::Missing GitHub Actions secret CLOUDFLARE_R2_ACCESS_KEY_ID."
+            exit 1
+          fi
+
+          if [[ -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "::error::Missing GitHub Actions secret CLOUDFLARE_R2_SECRET_ACCESS_KEY."
+            exit 1
+          fi
+
+          if ! command -v aws >/dev/null 2>&1; then
+            echo "::error::The GitHub runner does not have the AWS command-line tools required for Cloudflare R2."
+            exit 1
+          fi
+
+      - name: Create, inspect, and encrypt the backup
+        id: backup
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          backup_workspace="$(mktemp -d "${RUNNER_TEMP}/database-backup.XXXXXXXX")"
+          backup_timestamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+          backup_repository="${GITHUB_REPOSITORY##*/}"
+          backup_name="${backup_repository}-${backup_timestamp}"
+          backup_archive="${backup_workspace}/${backup_name}.dump"
+          backup_encrypted="${backup_archive}.enc"
+
+          docker run --rm \
+            --env BACKUP_DATABASE_URL \
+            --env BACKUP_NAME="$backup_name" \
+            --volume "${backup_workspace}:/backups" \
+            postgres:18-alpine \
+            sh -euc '
+              application_tables="$(
+                psql "$BACKUP_DATABASE_URL" \
+                  --no-psqlrc \
+                  --quiet \
+                  --tuples-only \
+                  --no-align \
+                  --set ON_ERROR_STOP=1 \
+                  --command "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('"'"'pg_catalog'"'"', '"'"'information_schema'"'"');"
+              )"
+
+              if [ "$application_tables" -eq 0 ]; then
+                echo "::error::Database contains no application tables; refusing to create a misleading empty backup."
+                exit 1
+              fi
+
+              pg_dump "$BACKUP_DATABASE_URL" \
+                --format=custom \
+                --compress=9 \
+                --no-owner \
+                --no-privileges \
+                --file="/backups/${BACKUP_NAME}.dump"
+
+              pg_restore --list "/backups/${BACKUP_NAME}.dump" >/dev/null
+              printf "%s\n" "$application_tables" > "/backups/${BACKUP_NAME}.tables"
+            '
+
+          openssl enc -aes-256-cbc \
+            -salt \
+            -pbkdf2 \
+            -iter 600000 \
+            -md sha256 \
+            -pass env:BACKUP_ENCRYPTION_KEY \
+            -in "$backup_archive" \
+            -out "$backup_encrypted"
+
+          openssl enc -d -aes-256-cbc \
+            -pbkdf2 \
+            -iter 600000 \
+            -md sha256 \
+            -pass env:BACKUP_ENCRYPTION_KEY \
+            -in "$backup_encrypted" \
+            -out /dev/null
+
+          (
+            cd "$backup_workspace"
+            sha256sum "${backup_name}.dump.enc" > "${backup_name}.dump.enc.sha256"
+          )
+
+          backup_table_count="$(<"${backup_workspace}/${backup_name}.tables")"
+          backup_size="$(stat --format=%s "$backup_encrypted")"
+
+          printf 'artifact_name=%s\n' "$backup_name" >> "$GITHUB_OUTPUT"
+          printf 'encrypted_path=%s\n' "$backup_encrypted" >> "$GITHUB_OUTPUT"
+          printf 'checksum_path=%s\n' "${backup_encrypted}.sha256" >> "$GITHUB_OUTPUT"
+          printf 'created_at=%s\n' "$backup_timestamp" >> "$GITHUB_OUTPUT"
+          printf 'table_count=%s\n' "$backup_table_count" >> "$GITHUB_OUTPUT"
+          printf 'encrypted_size=%s\n' "$backup_size" >> "$GITHUB_OUTPUT"
+
+      - name: Upload and verify encrypted Cloudflare backup
+        shell: bash
+        env:
+          BACKUP_ARTIFACT_NAME: ${{ steps.backup.outputs.artifact_name }}
+          BACKUP_ENCRYPTED_PATH: ${{ steps.backup.outputs.encrypted_path }}
+          BACKUP_CHECKSUM_PATH: ${{ steps.backup.outputs.checksum_path }}
+          BACKUP_CREATED_AT: ${{ steps.backup.outputs.created_at }}
+          BACKUP_TABLE_COUNT: ${{ steps.backup.outputs.table_count }}
+          BACKUP_ENCRYPTED_SIZE: ${{ steps.backup.outputs.encrypted_size }}
+        run: |
+          set -Eeuo pipefail
+
+          r2_endpoint="${CLOUDFLARE_R2_ENDPOINT%/}"
+          r2_prefix="database-backups/${GITHUB_REPOSITORY}"
+          r2_backup_key="${r2_prefix}/${BACKUP_ARTIFACT_NAME}.dump.enc"
+          r2_checksum_key="${r2_backup_key}.sha256"
+
+          aws s3 cp "$BACKUP_ENCRYPTED_PATH" \
+            "s3://${CLOUDFLARE_R2_BUCKET}/${r2_backup_key}" \
+            --endpoint-url "$r2_endpoint" \
+            --only-show-errors
+
+          aws s3 cp "$BACKUP_CHECKSUM_PATH" \
+            "s3://${CLOUDFLARE_R2_BUCKET}/${r2_checksum_key}" \
+            --endpoint-url "$r2_endpoint" \
+            --only-show-errors
+
+          r2_uploaded_size="$(
+            aws s3api head-object \
+              --bucket "$CLOUDFLARE_R2_BUCKET" \
+              --key "$r2_backup_key" \
+              --endpoint-url "$r2_endpoint" \
+              --query ContentLength \
+              --output text
+          )"
+
+          if [[ "$r2_uploaded_size" != "$BACKUP_ENCRYPTED_SIZE" ]]; then
+            echo "::error::The encrypted Cloudflare backup size does not match the local backup."
+            exit 1
+          fi
+
+          r2_uploaded_checksum="$(
+            aws s3 cp "s3://${CLOUDFLARE_R2_BUCKET}/${r2_backup_key}" - \
+              --endpoint-url "$r2_endpoint" \
+              --only-show-errors |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          local_checksum="$(awk '{print $1}' "$BACKUP_CHECKSUM_PATH")"
+
+          if [[ "$r2_uploaded_checksum" != "$local_checksum" ]]; then
+            echo "::error::The encrypted Cloudflare backup failed SHA-256 integrity verification."
+            exit 1
+          fi
+
+          {
+            printf '### Encrypted Cloudflare database backup\n\n'
+            printf -- '- Repository: `%s`\n' "$GITHUB_REPOSITORY"
+            printf -- '- Created: `%s`\n' "$BACKUP_CREATED_AT"
+            printf -- '- Application tables: `%s`\n' "$BACKUP_TABLE_COUNT"
+            printf -- '- Encrypted size: `%s bytes`\n' "$BACKUP_ENCRYPTED_SIZE"
+            printf -- '- Cloudflare bucket: `%s`\n' "$CLOUDFLARE_R2_BUCKET"
+            printf -- '- Cloudflare object: `%s`\n' "$r2_backup_key"
+            printf -- '- Retention target: `90 days, configured in Cloudflare`\n'
+            printf -- '- Integrity: `PostgreSQL archive inspected, encryption verified, Cloudflare upload downloaded and SHA-256 checked`\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report backup failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "::error::The scheduled database backup failed. Check this workflow immediately."
