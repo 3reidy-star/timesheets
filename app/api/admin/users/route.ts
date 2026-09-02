@@ -25,24 +25,52 @@ export async function PATCH(req: Request) {
 
     const body = await req.json();
     const userId = String(body?.userId || "");
-    const role = String(body?.role || "");
+    const hasRole = Object.prototype.hasOwnProperty.call(body, "role");
+    const hasActive = Object.prototype.hasOwnProperty.call(body, "active");
+    const role = hasRole ? String(body.role) : undefined;
+    const active = hasActive ? body.active : undefined;
 
     if (!userId) {
       return NextResponse.json({ error: "Missing user id" }, { status: 400 });
     }
 
-    if (!VALID_ROLES.has(role)) {
+    if (!hasRole && !hasActive) {
+      return NextResponse.json(
+        { error: "No changes supplied" },
+        { status: 400 },
+      );
+    }
+
+    if (hasRole && (!role || !VALID_ROLES.has(role))) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+    }
+
+    if (hasActive && typeof active !== "boolean") {
+      return NextResponse.json(
+        { error: "Invalid active status" },
+        { status: 400 },
+      );
+    }
+
+    if (userId === currentUser.id && active === false) {
+      return NextResponse.json(
+        { error: "You cannot deactivate your own account" },
+        { status: 400 },
+      );
     }
 
     const updated = await prisma.user.update({
       where: { id: userId },
-      data: { role: role as any },
+      data: {
+        ...(hasRole ? { role: role as any } : {}),
+        ...(hasActive ? { active } : {}),
+      },
       select: {
         id: true,
         name: true,
         email: true,
         role: true,
+        active: true,
         updatedAt: true,
       },
     });
@@ -51,7 +79,7 @@ export async function PATCH(req: Request) {
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message || "Failed to update user" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
