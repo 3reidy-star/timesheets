@@ -5,6 +5,7 @@ import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
 
 const VALID_ROLES = new Set(["ENGINEER", "ACCOUNTS", "ADMIN"]);
+const VALID_LANGUAGES = new Set(["ENGLISH", "RUSSIAN"]);
 
 export async function PATCH(req: Request) {
   try {
@@ -27,14 +28,16 @@ export async function PATCH(req: Request) {
     const userId = String(body?.userId || "");
     const hasRole = Object.prototype.hasOwnProperty.call(body, "role");
     const hasActive = Object.prototype.hasOwnProperty.call(body, "active");
+    const hasLanguage = Object.prototype.hasOwnProperty.call(body, "language");
     const role = hasRole ? String(body.role) : undefined;
     const active = hasActive ? body.active : undefined;
+    const language = hasLanguage ? String(body.language) : undefined;
 
     if (!userId) {
       return NextResponse.json({ error: "Missing user id" }, { status: 400 });
     }
 
-    if (!hasRole && !hasActive) {
+    if (!hasRole && !hasActive && !hasLanguage) {
       return NextResponse.json(
         { error: "No changes supplied" },
         { status: 400 },
@@ -52,6 +55,10 @@ export async function PATCH(req: Request) {
       );
     }
 
+    if (hasLanguage && (!language || !VALID_LANGUAGES.has(language))) {
+      return NextResponse.json({ error: "Invalid language" }, { status: 400 });
+    }
+
     if (userId === currentUser.id && active === false) {
       return NextResponse.json(
         { error: "You cannot deactivate your own account" },
@@ -64,6 +71,7 @@ export async function PATCH(req: Request) {
       data: {
         ...(hasRole ? { role: role as any } : {}),
         ...(hasActive ? { active } : {}),
+        ...(hasLanguage ? { language: language as any } : {}),
       },
       select: {
         id: true,
@@ -71,6 +79,7 @@ export async function PATCH(req: Request) {
         email: true,
         role: true,
         active: true,
+        language: true,
         updatedAt: true,
       },
     });

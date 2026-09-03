@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 type Role = "ENGINEER" | "ACCOUNTS" | "ADMIN";
+type UserLanguage = "ENGLISH" | "RUSSIAN";
 
 type UserRow = {
   id: string;
@@ -10,6 +11,7 @@ type UserRow = {
   email: string | null;
   role: Role;
   active: boolean;
+  language: UserLanguage;
   createdAt: Date | string;
   updatedAt: Date | string;
 };
@@ -27,7 +29,7 @@ export default function UserAdminPageClient({
 
   async function updateUser(
     userId: string,
-    updates: Partial<Pick<UserRow, "role" | "active">>
+    updates: Partial<Pick<UserRow, "role" | "active" | "language">>
   ) {
     setSavingId(userId);
     setMessage("");
@@ -79,6 +81,7 @@ export default function UserAdminPageClient({
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Email</th>
               <th className="px-4 py-3">Role</th>
+              <th className="px-4 py-3">Language</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Updated</th>
             </tr>
@@ -101,6 +104,27 @@ export default function UserAdminPageClient({
 
                 <td className="px-4 py-3 text-slate-600">
                   {user.email || "No email"}
+                </td>
+
+                <td className="px-4 py-3">
+                  <select
+                    value={user.language}
+                    disabled={savingId === user.id || user.role !== "ENGINEER"}
+                    onChange={(e) =>
+                      updateUser(user.id, {
+                        language: e.target.value as UserLanguage,
+                      })
+                    }
+                    className="rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100"
+                    title={
+                      user.role === "ENGINEER"
+                        ? "Language used on the engineer timesheet screens"
+                        : "Only engineer screens are translated"
+                    }
+                  >
+                    <option value="ENGLISH">English</option>
+                    <option value="RUSSIAN">Russian</option>
+                  </select>
                 </td>
 
                 <td className="px-4 py-3">

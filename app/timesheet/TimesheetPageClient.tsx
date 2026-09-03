@@ -370,14 +370,19 @@ export default function TimesheetPage() {
   async function deleteEntry(entry: Entry, dayEntryCount: number) {
     if (!week || deletingEntryId) return;
 
+    const isRussian = document.documentElement.lang === "ru";
     const dateLabel = `${dayLong(dateKey(entry.date))} ${shortDate(dateKey(entry.date))}`;
     const extraWarning =
       dayEntryCount > 1
-        ? "\n\nThis day contains multiple entries. Only the selected entry will be deleted."
+        ? isRussian
+          ? "\n\nЗа этот день есть несколько записей. Будет удалена только выбранная запись."
+          : "\n\nThis day contains multiple entries. Only the selected entry will be deleted."
         : "";
 
     const confirmed = window.confirm(
-      `Delete this timesheet entry for ${dateLabel}?${extraWarning}\n\nThis action cannot be undone.`
+      isRussian
+        ? `Удалить эту запись табеля за ${dateLabel}?${extraWarning}\n\nЭто действие нельзя отменить.`
+        : `Delete this timesheet entry for ${dateLabel}?${extraWarning}\n\nThis action cannot be undone.`
     );
 
     if (!confirmed) return;

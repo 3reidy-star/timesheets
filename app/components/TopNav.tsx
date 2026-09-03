@@ -2,6 +2,7 @@ import Link from "next/link";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import LogoutButton from "./LogoutButton";
+import EngineerRussian from "./EngineerRussian";
 
 export default async function TopNav() {
   const session = await auth();
@@ -18,6 +19,7 @@ export default async function TopNav() {
       role: true,
       active: true,
       name: true,
+      language: true,
     },
   });
 
@@ -33,7 +35,11 @@ export default async function TopNav() {
         : "/timesheet";
 
   return (
-    <header className="w-full border-b border-white/10 bg-[#002944]">
+    <>
+      <EngineerRussian
+        enabled={user.role === "ENGINEER" && user.language === "RUSSIAN"}
+      />
+      <header className="w-full border-b border-white/10 bg-[#002944]">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
         <Link href={homeHref} className="flex items-center gap-3">
           <img
@@ -107,6 +113,7 @@ export default async function TopNav() {
           <LogoutButton />
         </nav>
       </div>
-    </header>
+      </header>
+    </>
   );
 }

@@ -29,6 +29,7 @@ export default async function UserAdminPage() {
       email: true,
       role: true,
       active: true,
+      language: true,
       createdAt: true,
       updatedAt: true,
     },
