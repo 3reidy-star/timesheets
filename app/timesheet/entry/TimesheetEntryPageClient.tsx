@@ -480,6 +480,19 @@ export default function TimesheetEntryPageClient() {
       return;
     }
 
+    const selectedDay = new Date(`${dateIso}T00:00:00`).getDay();
+    const isWeekend = selectedDay === 0 || selectedDay === 6;
+
+    if (
+      isWork &&
+      isWeekend &&
+      !window.confirm(
+        `You have selected ${dayNameLong(dateIso)} ${prettyDate(dateIso)}. Are you sure you want to add a weekend job?`
+      )
+    ) {
+      return;
+    }
+
     setSaving(true);
     setErr(null);
 
