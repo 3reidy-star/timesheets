@@ -336,6 +336,8 @@ export default function TimesheetEntryPageClient() {
   const sp = useSearchParams();
 
   const weekStart = sp.get("weekStart") || "";
+  const adminWeekId = sp.get("adminWeekId") || "";
+  const employeeName = sp.get("employeeName") || "the employee";
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -505,6 +507,7 @@ export default function TimesheetEntryPageClient() {
           : null;
 
       const payload = {
+        adminWeekId: adminWeekId || undefined,
         date: dateIso,
         type,
         startTime,
@@ -531,7 +534,11 @@ export default function TimesheetEntryPageClient() {
         ? String((data as any).weekStart).slice(0, 10)
         : weekStart;
 
-      router.push(`/timesheet?weekStart=${encodeURIComponent(nextWeekStart)}`);
+      router.push(
+        adminWeekId
+          ? `/admin/timesheets?weekId=${encodeURIComponent(adminWeekId)}`
+          : `/timesheet?weekStart=${encodeURIComponent(nextWeekStart)}`,
+      );
       router.refresh();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to create entry");
@@ -540,7 +547,11 @@ export default function TimesheetEntryPageClient() {
     }
   }
 
-  const backHref = weekStart ? `/timesheet?weekStart=${encodeURIComponent(weekStart)}` : "/timesheet";
+  const backHref = adminWeekId
+    ? `/admin/timesheets?weekId=${encodeURIComponent(adminWeekId)}`
+    : weekStart
+      ? `/timesheet?weekStart=${encodeURIComponent(weekStart)}`
+      : "/timesheet";
 
   const halfLabels = dateIso
     ? {
@@ -559,7 +570,9 @@ export default function TimesheetEntryPageClient() {
       ) : null}
 
       <InputCard>
-        <h1 className="text-2xl font-semibold text-slate-900">Add entry</h1>
+        <h1 className="text-2xl font-semibold text-slate-900">
+          {adminWeekId ? `Add entry for ${employeeName}` : "Add entry"}
+        </h1>
         <p className="mt-2 text-sm text-slate-600">
           For Work: do not include lunch. If total working time in a day is{" "}
           <span className="font-semibold text-slate-900">

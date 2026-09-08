@@ -140,7 +140,7 @@ export default function AdminTimesheetsPageClient({ initialWeeks }: Props) {
 
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<
-    null | "APPROVE" | "REJECT" | "DELETE" | "ENTRY_DELETE"
+    null | "APPROVE" | "REJECT" | "SUBMIT" | "DELETE" | "ENTRY_DELETE"
   >(null);
   const [deletingEntryId, setDeletingEntryId] = useState<string | null>(null);
 
@@ -303,6 +303,39 @@ setDetail({
       setSelectedId(null);
     } catch (err: any) {
       setError(err?.message ?? "Failed to delete week");
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function submitForEmployee() {
+    if (!detail || detail.status !== "DRAFT") return;
+
+    const who = getUserLabel(detail.user);
+    if (!window.confirm(`Resubmit this timesheet week for ${who}?`)) return;
+
+    setError(null);
+    setActing("SUBMIT");
+
+    try {
+      const response = await fetch("/api/week/submit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ weekId: detail.id }),
+      });
+      const data = await readJsonOrText(response);
+      if (!response.ok) {
+        throw new Error((data as any)?.error ?? "Failed to resubmit week");
+      }
+
+      setWeeks((prev) =>
+        prev.map((week) =>
+          week.id === detail.id ? { ...week, status: "SUBMITTED" } : week,
+        ),
+      );
+      await loadDetail(detail.id);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to resubmit week");
     } finally {
       setActing(null);
     }
@@ -607,6 +640,33 @@ const breakLabel = computed?.rules?.unpaidBreakHours
                   >
                     {acting === "DELETE" ? "Deleting…" : "Delete Week"}
                   </button>
+
+                  {detail.status === "DRAFT" ? (
+                    <>
+                      <Link
+                        href={`/timesheet/entry?weekStart=${encodeURIComponent(
+                          isoDate(new Date(detail.weekStart)),
+                        )}&adminWeekId=${encodeURIComponent(
+                          detail.id,
+                        )}&employeeName=${encodeURIComponent(
+                          getUserLabel(detail.user),
+                        )}`}
+                        className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500"
+                      >
+                        Add Entry
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={submitForEmployee}
+                        disabled={!!acting || detail.entries.length === 0}
+                        className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:opacity-95 disabled:opacity-50"
+                      >
+                        {acting === "SUBMIT"
+                          ? "Resubmitting…"
+                          : "Resubmit for Employee"}
+                      </button>
+                    </>
+                  ) : null}
 
                   {detail.status === "SUBMITTED" ? (
                     <>

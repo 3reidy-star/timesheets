@@ -34,9 +34,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "weekId is required" }, { status: 400 });
     }
 
+    const isAdmin = user.role === "ADMIN" || user.role === "ACCOUNTS";
     const existing = await prisma.timesheetWeek.findFirst({
-      where: { id: weekId, userId: user.id },
-      select: { id: true, status: true },
+      where: isAdmin ? { id: weekId } : { id: weekId, userId: user.id },
+      select: { id: true, status: true, userId: true },
     });
 
     if (!existing) {
@@ -54,7 +55,10 @@ export async function POST(req: Request) {
           data: {
             weekId,
             action: "SUBMITTED" as any,
-            comment: null,
+            comment:
+              isAdmin && existing.userId !== user.id
+                ? "Resubmitted by an administrator on behalf of the employee."
+                : null,
             performedById: user.id,
           },
         });

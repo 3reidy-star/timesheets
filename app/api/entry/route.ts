@@ -205,15 +205,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    const user = await prisma.user.findUnique({
+    const currentUser = await prisma.user.findUnique({
       where: { email: session.user.email },
     });
 
-    if (!user) {
+    if (!currentUser || !currentUser.active) {
       return NextResponse.json({ error: "User not found" }, { status: 403 });
     }
 
     const body = await request.json();
+    const adminWeekId = toString(body?.adminWeekId);
 
     const type = (toString(body?.type) || "WORK").toUpperCase() as EntryType;
     const date = toDate(body?.date, "date");
@@ -226,12 +227,49 @@ export async function POST(request: Request) {
     const leftEarlyByChoice = toBoolean(body?.leftEarlyByChoice);
     const jobAndKnock = toBoolean(body?.jobAndKnock);
 
-    const weekStart = startOfWeekMonday(date);
-    const week = await prisma.timesheetWeek.upsert({
-      where: { userId_weekStart: { userId: user.id, weekStart } },
-      update: {},
-      create: { userId: user.id, weekStart, status: "DRAFT" },
-    });
+    let targetUserId = currentUser.id;
+    let weekStart = startOfWeekMonday(date);
+    let week;
+
+    if (adminWeekId) {
+      const isAdmin =
+        currentUser.role === "ADMIN" || currentUser.role === "ACCOUNTS";
+      if (!isAdmin) {
+        return NextResponse.json({ error: "Not authorised" }, { status: 403 });
+      }
+
+      week = await prisma.timesheetWeek.findUnique({
+        where: { id: adminWeekId },
+        select: { id: true, userId: true, weekStart: true, status: true },
+      });
+      if (!week) {
+        return NextResponse.json({ error: "Week not found" }, { status: 404 });
+      }
+      if (week.status !== "DRAFT") {
+        return NextResponse.json(
+          { error: "The week must be rejected or reopened before adding an entry" },
+          { status: 400 },
+        );
+      }
+
+      const weekEnd = new Date(week.weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
+      if (date < week.weekStart || date >= weekEnd) {
+        return NextResponse.json(
+          { error: "The entry date must be within the selected week" },
+          { status: 400 },
+        );
+      }
+
+      targetUserId = week.userId;
+      weekStart = week.weekStart;
+    } else {
+      week = await prisma.timesheetWeek.upsert({
+        where: { userId_weekStart: { userId: currentUser.id, weekStart } },
+        update: {},
+        create: { userId: currentUser.id, weekStart, status: "DRAFT" },
+      });
+    }
 
     const defaultWorkTimes = standardTimesForDate(date);
 
@@ -293,7 +331,7 @@ export async function POST(request: Request) {
     const entry = await prisma.timesheetEntry.create({
       data: {
         weekId: week.id,
-        userId: user.id,
+        userId: targetUserId,
         date,
         type,
         job: job || "",
@@ -312,6 +350,17 @@ export async function POST(request: Request) {
       },
       select: { id: true },
     });
+
+    if (adminWeekId) {
+      await prisma.weekAudit.create({
+        data: {
+          weekId: week.id,
+          action: "EDITED" as any,
+          comment: "Entry added by an administrator on behalf of the employee.",
+          performedById: currentUser.id,
+        },
+      });
+    }
 
     return NextResponse.json({
       ok: true,
