@@ -1,5 +1,7 @@
 // app/lib/timesheetTotals.ts
 
+import { getEnglandBankHoliday } from "@/app/lib/englandBankHolidays";
+
 export const BREAK_THRESHOLD_HOURS = 8;
 export const BREAK_HOURS = 0.5;
 export const BUSINESS_TOP_UP_HOURS = 0.5;
@@ -116,7 +118,21 @@ function computeEntryWeekdayOT(entry: TimesheetEntryForTotals) {
   return round2(otMin / 60);
 }
 
-export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
+function normaliseWeekStart(value?: Date | string | null) {
+  if (!value) return null;
+  const date = typeof value === "string" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const dow = date.getUTCDay();
+  const diff = dow === 0 ? -6 : 1 - dow;
+  date.setUTCDate(date.getUTCDate() + diff);
+  date.setUTCHours(0, 0, 0, 0);
+  return date;
+}
+
+export function calcWeekTotals(
+  entries: TimesheetEntryForTotals[],
+  weekStartInput?: Date | string | null,
+) {
   const byDay = new Map<string, TimesheetEntryForTotals[]>();
 
   for (const entry of entries) {
@@ -124,11 +140,28 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
     byDay.set(key, [...(byDay.get(key) ?? []), entry]);
   }
 
+  const inferredWeekStart = entries.length > 0 ? normaliseWeekStart(entries[0].date) : null;
+  const weekStart = normaliseWeekStart(weekStartInput) ?? inferredWeekStart;
+
+  // Seed bank-holiday dates even when the employee has no entry. This means
+  // a normal non-working bank holiday is still included in payroll totals.
+  if (weekStart) {
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = new Date(weekStart);
+      date.setUTCDate(date.getUTCDate() + offset);
+      if (getEnglandBankHoliday(date)) {
+        const key = dayKeyUTC(date);
+        if (!byDay.has(key)) byDay.set(key, []);
+      }
+    }
+  }
+
   const days = [...byDay.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([dateIso, list]) => {
-      const date = new Date(list[0].date);
+      const date = new Date(`${dateIso}T00:00:00Z`);
       const dow = date.getUTCDay();
+      const bankHoliday = getEnglandBankHoliday(date);
 
       const workingEntries = list.filter((entry) => isWorkingType(entry.type));
       const paidNonWorkingEntries = list.filter((entry) =>
@@ -164,7 +197,16 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
       let otSatHours = 0;
       let otSunBhHours = 0;
 
-      if (hasLeftEarlyWorking || hasJobAndKnockWorking) {
+      if (bankHoliday) {
+        // Pastorfrigor does not normally work England & Wales bank holidays.
+        // The employee receives the normal core pay for that weekday without
+        // needing to enter a holiday line. Any exceptional work is Sun/BH OT.
+        const bankHolidayCoreHours = corePaidHoursForDate(date);
+        regularHours = Math.max(bankHolidayCoreHours, paidNonWorkingHours);
+        corePaidHours = regularHours;
+        otSunBhHours = workedHours;
+        breakHours = workingEntries.length > 0 ? BREAK_HOURS : 0;
+      } else if (hasLeftEarlyWorking || hasJobAndKnockWorking) {
         regularHours = round2(
           list.reduce(
             (sum, entry) => sum + (Number(entry.regularHours) || 0),
@@ -256,6 +298,8 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
         overnightAllowance: overnightCount * 35,
         leftEarlyByChoice: hasLeftEarlyWorking,
         jobAndKnock: hasJobAndKnockWorking,
+        bankHoliday: Boolean(bankHoliday),
+        bankHolidayName: bankHoliday?.name ?? null,
         entries: list,
       };
     });
@@ -318,6 +362,7 @@ export function calcWeekTotals(entries: TimesheetEntryForTotals[]) {
       unpaidBreakHours: BREAK_HOURS,
       workingTypes: ["WORK", "TRAINING"],
       paidNonWorkingTypes: ["HOLIDAY_FULL", "HOLIDAY_HALF", "SICK"],
+      bankHolidays: "England & Wales bank holidays are paid automatically; work performed is Sun/BH overtime.",
     },
   };
 }
