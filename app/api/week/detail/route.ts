@@ -126,7 +126,7 @@ export async function GET(req: Request) {
       }
     }
 
-    const computed = calcWeekTotals(existing.entries);
+    const computed = calcWeekTotals(existing.entries, existing.weekStart);
 
     return NextResponse.json({
       week: existing,
