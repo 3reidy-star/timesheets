@@ -142,6 +142,10 @@ export default async function AdminPayrollPage({
     ? `/api/admin/payroll/export-pdf?${exportQuery}`
     : "";
 
+  const summaryExportHref = exportQuery
+    ? `/api/admin/payroll/export-summary?${exportQuery}`
+    : "";
+
   return (
     <main className="space-y-6 p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -152,13 +156,30 @@ export default async function AdminPayrollPage({
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {summaryExportHref ? (
+            <Link
+              href={summaryExportHref}
+              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Download Payroll Summary
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="rounded bg-blue-300 px-4 py-2 text-sm font-medium text-white"
+            >
+              Download Payroll Summary
+            </button>
+          )}
+
           {excelExportHref ? (
             <Link
               href={excelExportHref}
               className="rounded border px-4 py-2 text-sm font-medium hover:bg-gray-50"
             >
-              Download Excel
+              Download Detailed Excel
             </Link>
           ) : (
             <button
@@ -166,7 +187,7 @@ export default async function AdminPayrollPage({
               disabled
               className="rounded border px-4 py-2 text-sm font-medium text-gray-400"
             >
-              Download Excel
+              Download Detailed Excel
             </button>
           )}
 
@@ -237,6 +258,10 @@ export default async function AdminPayrollPage({
           </button>
         </div>
       </form>
+
+      <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+        <span className="font-semibold">Payroll Summary:</span> choose the date range and either one employee or All Employees, then download the Accounts-format spreadsheet.
+      </section>
 
       {!dateRangeIsValid && (
         <section className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
