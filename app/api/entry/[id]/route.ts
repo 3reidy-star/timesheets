@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { withEditableDays, ApprovalConflict } from "@/app/lib/dayApprovalLock";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ export async function GET(
       return NextResponse.json({ error: "Missing entry id" }, { status: 400 });
     }
 
+    await ensureDayApprovalSchema();
     const entry = await prisma.timesheetEntry.findUnique({
       where: { id },
       select: {

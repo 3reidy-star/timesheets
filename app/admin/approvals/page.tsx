@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 import { redirect } from "next/navigation";
 import AdminApprovalsPageClient, {
@@ -51,6 +52,7 @@ export default async function AdminApprovalsPage() {
 
   const currentWeekStart = startOfWeekMonday(new Date());
 
+  await ensureDayApprovalSchema();
   const weeks = await prisma.timesheetWeek.findMany({
     where: {
       weekStart: {

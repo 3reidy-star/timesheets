@@ -10,6 +10,8 @@ const date = value => new Date(`${value}T00:00:00Z`);
 const owner = { id: 'u', email: 'employee@example.test', name: 'Test Employee', role: 'ENGINEER', active: true };
 let actor = owner;
 let writes = 0;
+let tableExists = true;
+let schemaWrites = 0;
 const entry = day => ({ id: `e${day}`, weekId: 'w', userId: 'u', date: date(`2026-10-${day}`), type: 'WORK', job: `Site ${day}`, hours: 10, regularHours: 8, otMonFriHours: 2, otSatHours: 0, otSunBhHours: 0, startTime: '08:30', finishTime: '19:00', overnight: false });
 let week = { id: 'w', userId: 'u', weekStart: date('2026-10-12'), status: 'DRAFT', entries: [12,13,14,15,16,17,18].map(entry), dayApprovals: [], audits: [], user: owner };
 const enriched = () => ({ ...week, dayApprovals: week.dayApprovals.map(day => ({ ...day, reviewedBy: day.reviewedById ? { name: 'Reviewer', email: 'admin@example.test' } : null })), audits: week.audits.map(audit => ({ ...audit, performedBy: { name: 'Reviewer', email: 'admin@example.test' } })) });
@@ -17,10 +19,18 @@ const prisma = {
   user: { findUnique: async ({where}) => where.email ? actor : owner, findMany: async () => [owner] },
   timesheetWeek: {
     findFirst: async ({where}) => !where.userId || where.userId === week.userId ? enriched() : null,
-    findUnique: async () => enriched(), findUniqueOrThrow: async () => enriched(), findMany: async () => [enriched()], upsert: async () => enriched(),
+    findUnique: async () => enriched(), findUniqueOrThrow: async () => enriched(),
+    findMany: async () => {
+      if (!tableExists) throw { code: 'P2021', meta: { table: 'public.DayApproval', modelName: 'TimesheetWeek' } };
+      return [enriched()];
+    }, upsert: async () => enriched(),
     update: async ({data}) => { Object.assign(week,data); writes++; return enriched(); }, delete: async () => { writes++; return week; },
   },
   dayApproval: {
+    findFirst: async () => {
+      if (!tableExists) throw { code: 'P2021', meta: { table: 'public.DayApproval', modelName: 'DayApproval' } };
+      return week.dayApprovals[0] || null;
+    },
     findUnique: async ({where}) => week.dayApprovals.find(day => day.date.getTime() === where.weekId_date.date.getTime()) || null,
     upsert: async ({where,create,update}) => {
       let day = week.dayApprovals.find(day => day.date.getTime() === where.weekId_date.date.getTime());
@@ -38,6 +48,7 @@ const prisma = {
     deleteMany: async () => { week.entries = []; writes++; },
   },
   $queryRaw: async () => [],
+  $executeRawUnsafe: async sql => { schemaWrites++; if (sql.includes('CREATE TABLE IF NOT EXISTS "DayApproval"')) tableExists = true; },
   $transaction: async callback => { const before = structuredClone(week); try { return await callback(prisma); } catch (error) { week = before; throw error; } },
 };
 const cache = new Map();
@@ -50,7 +61,14 @@ function load(file) {
     if (name === '@/auth') return { auth: async () => actor ? {user:{email:actor.email}} : null };
     if (name === '@/app/lib/prisma') return {prisma};
     if (name === 'next/navigation') return { redirect: url => { throw new Error(`REDIRECT:${url}`); } };
+    if (name.startsWith('@/') && name.endsWith('.cjs')) return require(path.join(root,name.slice(2)));
     if (name.startsWith('@/')) return load(name.slice(2)+'.ts');
+    if (name.startsWith('.')) {
+      const base = path.resolve(path.dirname(filename),name);
+      const resolved = ['.ts','.tsx',''].map(suffix => base+suffix).find(candidate => fs.existsSync(candidate));
+      if (!resolved) throw new Error('Cannot resolve '+name);
+      return load(path.relative(root,resolved));
+    }
     return require(name);
   };
   vm.runInThisContext(`(function(require,module,exports){${source}\n})`,{filename})(importModule,module,module.exports);
@@ -76,6 +94,30 @@ async function summary(from,to) {
 }
 (async () => {
   assert.throws(() => load('app/approvals/page.tsx').default(),/REDIRECT:\/admin\/approvals/,'Old crashing route must use current screen');
+  // Reproduce the actual P2021 from an authenticated server-page request.
+  tableExists = false;
+  const rowsBeforeRepair = JSON.stringify(week.entries);
+  admin();
+  const approvalsPage = load('app/admin/approvals/page.tsx').default;
+  const page = await approvalsPage();
+  assert.ok(page, 'Server page renders after repairing the missing runtime table');
+  assert.equal(tableExists,true);
+  assert.ok(schemaWrites > 0);
+  assert.equal(JSON.stringify(week.entries),rowsBeforeRepair,'Runtime repair preserves all timesheets');
+  const writesAfterRepair = schemaWrites;
+  await approvalsPage();
+  assert.equal(schemaWrites,writesAfterRepair,'Existing runtime table is not recreated');
+  const { createDayApprovalReadiness } = load('app/lib/dayApprovalSchema.ts');
+  let checks = 0;
+  const ready = createDayApprovalReadiness({ dayApproval: { findFirst: async () => { checks++; return null; } } });
+  await Promise.all([ready(),ready(),ready()]);
+  assert.equal(checks,1,'Concurrent requests share a single readiness check');
+  let attempts = 0;
+  const retryReady = createDayApprovalReadiness({ dayApproval: { findFirst: async () => { if (++attempts === 1) throw { code:'P1001' }; return null; } } });
+  await assert.rejects(retryReady(), error => error.code === 'P1001');
+  await retryReady();
+  assert.equal(attempts,2,'A transient connection failure is retried');
+  actor=owner;
   assert.deepEqual(payroll.payrollPeriod(new Date('2026-10-15T12:00:00Z')),{from:'2026-09-16',to:'2026-10-15'});
   assert.deepEqual(payroll.payrollPeriod(new Date('2026-10-15T23:30:00Z')),{from:'2026-10-16',to:'2026-11-15'});
   assert.deepEqual(payroll.payrollPeriod(new Date('2026-01-01T00:00:00Z')),{from:'2025-12-16',to:'2026-01-15'});

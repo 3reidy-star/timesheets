@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { NextResponse } from "next/server";
 import { lockWeeks, ApprovalConflict } from "@/app/lib/dayApprovalLock";
 
@@ -34,6 +35,7 @@ export async function DELETE(
       return NextResponse.json({ error: "Missing week id" }, { status: 400 });
     }
 
+    await ensureDayApprovalSchema();
     await prisma.$transaction(async (tx) => {
       await lockWeeks(tx, [weekId]);
       const week = await tx.timesheetWeek.findUnique({ where: { id: weekId }, include: { dayApprovals: true } });

@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +49,7 @@ export async function GET(req: Request) {
       ? startOfWeekMonday(requested)
       : startOfWeekMonday(new Date());
 
+    await ensureDayApprovalSchema();
     let existing = await prisma.timesheetWeek.findUnique({
       where: {
         userId_weekStart: {

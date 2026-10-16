@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +47,7 @@ export async function GET(req: Request) {
     const weekId = getString(url.searchParams.get("weekId"));
     const weekStartParam = getString(url.searchParams.get("weekStart"));
 
+    await ensureDayApprovalSchema();
     let existing;
 
     if (weekId) {

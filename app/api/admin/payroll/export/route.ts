@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 import { isPayrollDayApproved } from "@/app/lib/payrollApproval";
 import ExcelJS from "exceljs";
@@ -183,6 +184,7 @@ export async function GET(req: Request) {
      */
     const weekSearchStart = addDays(fromDate, -6);
 
+    await ensureDayApprovalSchema();
     const weeks = await prisma.timesheetWeek.findMany({
       where: {
         userId,

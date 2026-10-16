@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 
 export class ApprovalConflict extends Error {}
 
@@ -16,6 +17,7 @@ export async function withEditableDays<T>(
   write: (tx: Prisma.TransactionClient) => Promise<T>,
   expectedEntry?: { id: string; weekId: string; date: Date },
 ) {
+  await ensureDayApprovalSchema();
   return prisma.$transaction(async (tx) => {
     await lockWeeks(tx, days.map((day) => day.weekId));
     if (expectedEntry) {

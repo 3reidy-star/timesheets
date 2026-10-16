@@ -1,7 +1,9 @@
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { isPayrollDayApproved } from "@/app/lib/payrollApproval";
 
 export async function approvedPayrollEntries(from: Date, to: Date, userId?: string) {
+  await ensureDayApprovalSchema();
   const weeks = await prisma.timesheetWeek.findMany({
     where: {
       ...(userId ? { userId } : { user: { active: true } }),

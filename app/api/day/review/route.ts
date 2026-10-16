@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { lockWeeks, ApprovalConflict } from "@/app/lib/dayApprovalLock";
 import { parsePayrollDate } from "@/app/lib/payrollApproval";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
@@ -25,6 +26,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Valid weekId, date and action are required" }, { status: 400 });
     }
     if (action !== "APPROVE" && !comment) return NextResponse.json({ error: "A reason is required" }, { status: 400 });
+    await ensureDayApprovalSchema();
     const week = await prisma.$transaction(async (tx) => {
       await lockWeeks(tx, [weekId]);
       const current = await tx.timesheetWeek.findUnique({

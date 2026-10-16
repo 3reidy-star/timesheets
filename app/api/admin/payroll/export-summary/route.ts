@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 import { isPayrollDayApproved } from "@/app/lib/payrollApproval";
 import ExcelJS from "exceljs";
@@ -42,6 +43,7 @@ export async function GET(req: Request) {
     const users = await prisma.user.findMany({ where: { active: true, ...(userId === "all" ? {} : { id: userId }) }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } });
     if (userId !== "all" && users.length === 0) return NextResponse.json({ error: "Employee not found" }, { status: 404 });
     const userIds = users.map((user) => user.id); const weekSearchStart = addDays(fromDate, -6);
+    await ensureDayApprovalSchema();
     const weeks = userIds.length ? await prisma.timesheetWeek.findMany({ where: { userId: { in: userIds }, OR: [{ status: "APPROVED" }, { dayApprovals: { some: { status: "APPROVED", date: { gte: fromDate, lte: toDate } } } }], weekStart: { gte: weekSearchStart, lte: toDate } }, include: { dayApprovals: true, entries: { orderBy: [{ date: "asc" }, { createdAt: "asc" }] } }, orderBy: [{ userId: "asc" }, { weekStart: "asc" }] }) : [];
     const weeksByUser = new Map<string, typeof weeks>();
     for (const week of weeks) weeksByUser.set(week.userId, [...(weeksByUser.get(week.userId) || []), week]);

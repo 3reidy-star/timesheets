@@ -9,7 +9,7 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 - Complete normal whole-week submission and approval afterward. Previously approved dates stay approved. The existing weekly business top-up is finalized only after whole-week approval and belongs to Friday's payroll period; replace earlier downloads if final approval changes their totals.
 - **Reopen day** requires a reason and removes that day from payroll until it is resubmitted and reapproved, preserving other approvals. **Reopen Week** clears every day approval. Notify Accounts and replace affected downloads after corrections.
 - `/approvals` redirects to `/admin/approvals`, avoiding the obsolete client screen's missing-totals error. Administrators and Accounts can use the current screen.
-- Uses the existing `DayApproval` model. Deployment checks it before building; only a confirmed missing `DayApproval` table triggers creation of that table, enum and indexes. Existing timesheets, approvals and other tables are not modified. Other database errors stop deployment. There is no database reset or general schema push.
+- Uses the existing `DayApproval` model. Deployment checks it before building. Live approval, timesheet and payroll requests also check their actual runtime database before querying it. Only a confirmed missing `DayApproval` table triggers creation of that table, enum and indexes. Existing timesheets, approvals and other tables are not modified. Checks share one promise per server instance and retry after failure. There is no database reset or general schema push.
 - Run `npm run test:payroll` (mocked database; no emails) and `npm run build` before publishing.
 
 First, run the development server:
