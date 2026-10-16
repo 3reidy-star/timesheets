@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { withEditableDays, ApprovalConflict } from "@/app/lib/dayApprovalLock";
 
 export const dynamic = "force-dynamic";
 
@@ -10,10 +11,10 @@ type EntryType = "WORK" | "HOLIDAY_FULL" | "HOLIDAY_HALF" | "SICK" | "TRAINING";
 
 function startOfWeekMonday(d: Date) {
   const date = new Date(d);
-  const day = date.getDay(); // 0 Sun .. 6 Sat
+  const day = date.getUTCDay(); // 0 Sun .. 6 Sat
   const diff = (day === 0 ? -6 : 1) - day;
-  date.setDate(date.getDate() + diff);
-  date.setHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + diff);
+  date.setUTCHours(0, 0, 0, 0);
   return date;
 }
 
@@ -23,7 +24,7 @@ function toString(value: unknown) {
 
 function toDate(value: unknown, field: string) {
   const s = typeof value === "string" ? value.trim() : "";
-  const d = new Date(`${s}T00:00:00`);
+  const d = new Date(`${s}T00:00:00Z`);
   if (!s || Number.isNaN(d.getTime())) throw new Error(`${field} must be a valid date`);
   return d;
 }
@@ -64,7 +65,7 @@ function toBoolean(value: unknown) {
  * Fri: 5.0 paid
  */
 function standardPaidHoursForDate(date: Date) {
-  const dow = date.getDay(); // 0 Sun .. 6 Sat
+  const dow = date.getUTCDay(); // 0 Sun .. 6 Sat
   if (dow >= 1 && dow <= 4) return 8;
   if (dow === 5) return 5;
   return 0;
@@ -75,7 +76,7 @@ function standardPaidHoursForDate(date: Date) {
  * These are the contracted day spans before unpaid break.
  */
 function standardTimesForDate(date: Date) {
-  const dow = date.getDay();
+  const dow = date.getUTCDay();
   if (dow === 5) return { start: "08:30", finish: "14:00" };
   return { start: "08:30", finish: "17:00" };
 }
@@ -86,7 +87,7 @@ function standardTimesForDate(date: Date) {
  * Fri full day span: 08:30–14:00
  */
 function halfDayTimesForDate(date: Date, half: "AM" | "PM") {
-  const dow = date.getDay();
+  const dow = date.getUTCDay();
 
   if (dow === 5) {
     return half === "PM"
@@ -100,7 +101,7 @@ function halfDayTimesForDate(date: Date, half: "AM" | "PM") {
 }
 
 function getRegularCapForDate(date: Date) {
-  const dow = date.getDay();
+  const dow = date.getUTCDay();
   if (dow >= 1 && dow <= 4) return 8;
   if (dow === 5) return 5;
   return 0;
@@ -148,7 +149,7 @@ function calcWorkHours(
   const regularHours = round2(Math.min(regularCap, total));
   const ot = round2(Math.max(0, total - regularCap));
 
-  const dow = date.getDay();
+  const dow = date.getUTCDay();
 
   let otMonFriHours = 0;
   let otSatHours = 0;
@@ -253,7 +254,7 @@ export async function POST(request: Request) {
       }
 
       const weekEnd = new Date(week.weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 7);
+      weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
       if (date < week.weekStart || date >= weekEnd) {
         return NextResponse.json(
           { error: "The entry date must be within the selected week" },
@@ -328,7 +329,7 @@ export async function POST(request: Request) {
       otSunBhHours = 0;
     }
 
-    const entry = await prisma.timesheetEntry.create({
+    const entry = await withEditableDays([{ weekId: week.id, date }], Boolean(adminWeekId), (tx) => tx.timesheetEntry.create({
       data: {
         weekId: week.id,
         userId: targetUserId,
@@ -349,7 +350,7 @@ export async function POST(request: Request) {
         agreedRate,
       },
       select: { id: true },
-    });
+    }));
 
     if (adminWeekId) {
       await prisma.weekAudit.create({
@@ -370,6 +371,6 @@ export async function POST(request: Request) {
     });
   } catch (e: any) {
     console.error("api/entry POST error:", e);
-    return NextResponse.json({ error: e?.message ?? "Failed to create entry" }, { status: 500 });
+    return NextResponse.json({ error: e?.message ?? "Failed to create entry" }, { status: e instanceof ApprovalConflict ? 409 : 500 });
   }
 }

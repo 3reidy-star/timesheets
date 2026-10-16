@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { withEditableDays, ApprovalConflict } from "@/app/lib/dayApprovalLock";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,10 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> | { id: string } }
 ) {
   try {
+    const session = await auth();
+    if (!session?.user?.email) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true, role: true, active: true } });
+    if (!user?.active) return NextResponse.json({ error: "Not authorised" }, { status: 403 });
     const p = (ctx as any).params;
     const { id } =
       typeof (p as any)?.then === "function"
@@ -32,6 +37,7 @@ export async function GET(
             id: true,
             status: true,
             weekStart: true,
+            dayApprovals: { select: { date: true, status: true } },
           },
         },
         date: true,
@@ -57,6 +63,7 @@ export async function GET(
     if (!entry) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
+    if (entry.userId !== user.id && user.role !== "ADMIN" && user.role !== "ACCOUNTS") return NextResponse.json({ error: "Not authorised" }, { status: 403 });
 
     return NextResponse.json({ entry });
   } catch (e: any) {
@@ -103,6 +110,8 @@ export async function DELETE(
       select: {
         id: true,
         userId: true,
+        weekId: true,
+        date: true,
         week: {
           select: {
             status: true,
@@ -129,14 +138,14 @@ export async function DELETE(
       );
     }
 
-    await prisma.timesheetEntry.delete({ where: { id } });
+    await withEditableDays([{ weekId: entry.weekId, date: entry.date }], false, (tx) => tx.timesheetEntry.delete({ where: { id } }), entry);
 
     return NextResponse.json({ success: true });
   } catch (e: any) {
     console.error("api/entry/[id] DELETE error:", e);
     return NextResponse.json(
       { error: e?.message ?? "Failed to delete entry" },
-      { status: 500 }
+      { status: e instanceof ApprovalConflict ? 409 : 500 }
     );
   }
 }

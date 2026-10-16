@@ -1,27 +1,31 @@
 import Link from "next/link";
 import { prisma } from "@/app/lib/prisma";
+import { payrollPeriod } from "@/app/lib/payrollApproval";
+import { approvedPayrollEntries } from "@/app/lib/payrollData";
+import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 
 function startOfDay(value: string) {
-  return new Date(`${value}T00:00:00`);
+  return new Date(`${value}T00:00:00Z`);
 }
 
 function endOfDay(value: string) {
-  return new Date(`${value}T23:59:59.999`);
+  return new Date(`${value}T23:59:59.999Z`);
 }
 
 function formatInputDate(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function formatDate(date: Date) {
-  return date.toLocaleDateString("en-GB");
+  return date.toLocaleDateString("en-GB", { timeZone: "UTC" });
 }
 
 function formatDay(date: Date) {
-  return date.toLocaleDateString("en-GB", { weekday: "long" });
+  return date.toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "long" });
 }
 
 function formatTime(value: string | Date | null) {
@@ -46,14 +50,16 @@ export default async function AdminPayrollPage({
     userId?: string;
   }>;
 }) {
+  const session = await auth();
+  if (!session?.user?.email) redirect("/login?callbackUrl=/admin/payroll");
+  const requestingUser = await prisma.user.findUnique({ where: { email: session.user.email }, select: { active: true, role: true } });
+  if (!requestingUser?.active || !["ADMIN", "ACCOUNTS"].includes(requestingUser.role)) redirect("/timesheet");
   const params = await searchParams;
 
-  const today = new Date();
-  const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const period = payrollPeriod();
 
-  const selectedFrom = params.from || formatInputDate(firstDayOfMonth);
-  const selectedTo = params.to || formatInputDate(lastDayOfMonth);
+  const selectedFrom = params.from || period.from;
+  const selectedTo = params.to || period.to;
   const selectedUserId = params.userId || "all";
   const isAllEmployees = selectedUserId === "all";
 
@@ -77,25 +83,7 @@ export default async function AdminPayrollPage({
     : null;
 
   const entries = dateRangeIsValid
-    ? await prisma.timesheetEntry.findMany({
-        where: {
-          date: {
-            gte: startOfDay(selectedFrom),
-            lte: endOfDay(selectedTo),
-          },
-          week: {
-            status: "APPROVED",
-            ...(isAllEmployees ? {} : { userId: selectedUserId }),
-          },
-        },
-        include: {
-          week: {
-            include: {
-              user: true,
-            },
-          },
-        },
-      })
+    ? await approvedPayrollEntries(startOfDay(selectedFrom), endOfDay(selectedTo), isAllEmployees ? undefined : selectedUserId)
     : [];
 
   entries.sort((a, b) => {
@@ -152,7 +140,9 @@ export default async function AdminPayrollPage({
         <div>
           <h1 className="text-2xl font-bold">Accounts Payroll</h1>
           <p className="text-sm text-gray-600">
-            Approved timesheet entries within a selected date range.
+            Payroll runs from the 16th to the 15th. Downloads include saved day approvals even
+            while the rest of the week is open. Weekly business top-up is included in Excel
+            only after full-week approval; replace earlier downloads after final approval.
           </p>
         </div>
 

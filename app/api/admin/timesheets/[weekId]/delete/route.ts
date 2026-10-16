@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { NextResponse } from "next/server";
+import { lockWeeks, ApprovalConflict } from "@/app/lib/dayApprovalLock";
 
 export async function DELETE(
   _req: Request,
@@ -33,18 +34,21 @@ export async function DELETE(
       return NextResponse.json({ error: "Missing week id" }, { status: 400 });
     }
 
-    await prisma.$transaction([
-      prisma.weekAudit.deleteMany({ where: { weekId } }),
-      prisma.timesheetEntry.deleteMany({ where: { weekId } }),
-      prisma.timesheetWeek.delete({ where: { id: weekId } }),
-    ]);
+    await prisma.$transaction(async (tx) => {
+      await lockWeeks(tx, [weekId]);
+      const week = await tx.timesheetWeek.findUnique({ where: { id: weekId }, include: { dayApprovals: true } });
+      if (week?.status === "APPROVED" || week?.dayApprovals.some((day) => day.status === "APPROVED" || day.status === "PENDING")) throw new ApprovalConflict("Reopen submitted or approved days before deleting this week.");
+      await tx.weekAudit.deleteMany({ where: { weekId } });
+      await tx.timesheetEntry.deleteMany({ where: { weekId } });
+      await tx.timesheetWeek.delete({ where: { id: weekId } });
+    });
 
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Delete admin timesheet week error:", error);
     return NextResponse.json(
-      { error: "Failed to delete timesheet week" },
-      { status: 500 }
+      { error: error instanceof ApprovalConflict ? error.message : "Failed to delete timesheet week" },
+      { status: error instanceof ApprovalConflict ? 409 : 500 }
     );
   }
 }

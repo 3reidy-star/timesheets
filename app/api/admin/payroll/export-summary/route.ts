@@ -3,12 +3,13 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
+import { isPayrollDayApproved } from "@/app/lib/payrollApproval";
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 
-function startOfDay(value: string) { return new Date(`${value}T00:00:00`); }
-function endOfDay(value: string) { return new Date(`${value}T23:59:59.999`); }
-function addDays(dateInput: Date, days: number) { const date = new Date(dateInput); date.setDate(date.getDate() + days); return date; }
+function startOfDay(value: string) { return new Date(`${value}T00:00:00Z`); }
+function endOfDay(value: string) { return new Date(`${value}T23:59:59.999Z`); }
+function addDays(dateInput: Date, days: number) { const date = new Date(dateInput); date.setUTCDate(date.getUTCDate() + days); return date; }
 function fridayOfWeek(weekStart: Date) { return addDays(weekStart, 4); }
 function normaliseName(value: string | null | undefined) { return (value || "").trim().replace(/\s+/g, " ").toLowerCase(); }
 function splitName(value: string | null | undefined) { const clean = (value || "").trim().replace(/\s+/g, " "); if (!clean) return { firstName: "", surname: "" }; const parts = clean.split(" "); return { firstName: parts[0] || "", surname: parts.slice(1).join(" ") }; }
@@ -41,7 +42,7 @@ export async function GET(req: Request) {
     const users = await prisma.user.findMany({ where: { active: true, ...(userId === "all" ? {} : { id: userId }) }, orderBy: { name: "asc" }, select: { id: true, name: true, email: true } });
     if (userId !== "all" && users.length === 0) return NextResponse.json({ error: "Employee not found" }, { status: 404 });
     const userIds = users.map((user) => user.id); const weekSearchStart = addDays(fromDate, -6);
-    const weeks = userIds.length ? await prisma.timesheetWeek.findMany({ where: { userId: { in: userIds }, status: "APPROVED", weekStart: { gte: weekSearchStart, lte: toDate } }, include: { entries: { orderBy: [{ date: "asc" }, { createdAt: "asc" }] } }, orderBy: [{ userId: "asc" }, { weekStart: "asc" }] }) : [];
+    const weeks = userIds.length ? await prisma.timesheetWeek.findMany({ where: { userId: { in: userIds }, OR: [{ status: "APPROVED" }, { dayApprovals: { some: { status: "APPROVED", date: { gte: fromDate, lte: toDate } } } }], weekStart: { gte: weekSearchStart, lte: toDate } }, include: { dayApprovals: true, entries: { orderBy: [{ date: "asc" }, { createdAt: "asc" }] } }, orderBy: [{ userId: "asc" }, { weekStart: "asc" }] }) : [];
     const weeksByUser = new Map<string, typeof weeks>();
     for (const week of weeks) weeksByUser.set(week.userId, [...(weeksByUser.get(week.userId) || []), week]);
 
@@ -57,13 +58,14 @@ export async function GET(req: Request) {
       const employeeWeeks = weeksByUser.get(user.id) || []; const employeeName = user.name?.trim() || user.email || ""; const metadata = PAYROLL_METADATA[normaliseName(employeeName)] || {}; const { firstName, surname } = splitName(employeeName);
       let regularHours = 0, weekdayOvertime = 0, saturdayOvertime = 0, sundayOvertime = 0, overnightStays = 0, holidayDays = 0;
       for (const week of employeeWeeks) {
-        const computed = calcWeekTotals(week.entries);
+        const computed = calcWeekTotals(week.entries, week.weekStart);
         for (const day of computed.days) {
           const dayDate = startOfDay(day.date); if (dayDate < fromDate || dayDate > toDate) continue;
+          if (!isPayrollDayApproved(week, dayDate)) continue;
           regularHours += Number(day.regularHours || 0); weekdayOvertime += Number(day.otMonFriHours || 0); saturdayOvertime += Number(day.otSatHours || 0); sundayOvertime += Number(day.otSunBhHours || 0); overnightStays += Number(day.overnightCount || 0);
           for (const entry of day.entries) { if (entry.type === "HOLIDAY_FULL") holidayDays += 1; if (entry.type === "HOLIDAY_HALF") holidayDays += 0.5; }
         }
-        const topUpDate = fridayOfWeek(week.weekStart); if (topUpDate >= fromDate && topUpDate <= toDate) weekdayOvertime += Number(computed.totals.businessTopUpHours || 0);
+        const topUpDate = fridayOfWeek(week.weekStart); if (week.status === "APPROVED" && topUpDate >= fromDate && topUpDate <= toDate) weekdayOvertime += Number(computed.totals.businessTopUpHours || 0);
       }
       const basicHours = metadata.basicHours ? round2(regularHours) : null;
       const row = sheet.addRow([metadata.payrollNumber ?? null, metadata.title || null, firstName || null, surname || null, null, basicHours && basicHours !== 0 ? basicHours : null, weekdayOvertime ? round2(weekdayOvertime) : null, saturdayOvertime ? round2(saturdayOvertime) : null, sundayOvertime ? round2(sundayOvertime) : null, overnightStays || null, holidayDays ? round2(holidayDays) : null, null]);

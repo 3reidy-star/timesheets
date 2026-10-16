@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { withEditableDays, ApprovalConflict } from "@/app/lib/dayApprovalLock";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 
 function toString(value: unknown) {
@@ -85,9 +86,9 @@ export async function POST(request: Request) {
     const weekId = entry.week.id;
 
     // Delete the entry only
-    await prisma.timesheetEntry.delete({
+    await withEditableDays([{ weekId, date: entry.date }], isAdmin, (tx) => tx.timesheetEntry.delete({
       where: { id },
-    });
+    }), entry);
 
     const updatedWeek = await prisma.timesheetWeek.findUnique({
       where: { id: weekId },
@@ -146,7 +147,7 @@ export async function POST(request: Request) {
             ? e?.stack
             : undefined,
       },
-      { status: 500 }
+      { status: e instanceof ApprovalConflict ? 409 : 500 }
     );
   }
 }

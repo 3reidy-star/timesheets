@@ -8,6 +8,7 @@ type Week = {
   id: string;
   weekStart: string;
   status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+  dayApprovals?: { date: string; status: string }[];
 };
 
 type EntryType = "WORK" | "HOLIDAY_FULL" | "HOLIDAY_HALF" | "SICK" | "TRAINING";
@@ -31,6 +32,7 @@ type EntryApiResponse = {
       id: string;
       weekStart: string;
       status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+      dayApprovals?: { date: string; status: string }[];
     };
   };
 };
@@ -370,7 +372,8 @@ export default function TimesheetEntryEditPageClient() {
   const isWork = type === "WORK";
   const isHalfHoliday = type === "HOLIDAY_HALF";
   const isDraft = entryWeek?.status === "DRAFT";
-  const canEdit = isDraft || adminMode;
+  const dayLocked = entryWeek?.status === "APPROVED" || entryWeek?.dayApprovals?.some((day) => day.date.slice(0, 10) === dateIso && (day.status === "APPROVED" || day.status === "PENDING"));
+  const canEdit = (isDraft || adminMode) && !dayLocked;
   const hasQuarterHourTimes =
     !isWork || (isQuarterHourTime(startTime) && isQuarterHourTime(finishTime));
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 
 export type ApprovalEntry = {
   id: string;
@@ -35,6 +35,7 @@ export type ApprovalWeek = {
   id: string;
   weekStart: string;
   status: string;
+  dayApprovals: { date: string; status: string; comment: string | null }[];
   user: {
     id: string;
     name: string | null;
@@ -64,7 +65,7 @@ type Props = {
 
 type ActingState = {
   weekId: string;
-  action: "APPROVE" | "REJECT" | "REOPEN";
+  action: "APPROVE" | "REJECT" | "REOPEN" | "SUBMIT_CUTOFF";
 } | null;
 
 const DAY_NAMES = [
@@ -232,7 +233,10 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
   );
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [reviewedRows, setReviewedRows] = useState<Set<string>>(new Set());
+  const reviewedRows = useMemo(() => new Set(weeks.flatMap((week) =>
+    week.dayApprovals.filter((day) => day.status === "APPROVED").map((day) => rowKey(week.id, dateKey(day.date))),
+  )), [weeks]);
+  const [actingDay, setActingDay] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<ActingState>(null);
   const [error, setError] = useState<string | null>(null);
@@ -256,14 +260,15 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
       weeks
         .filter((week) => dateKey(week.weekStart) === selectedWeekStart)
         .filter(
-          (week) => statusFilter === "ALL" || week.status === statusFilter,
+          (week) => statusFilter === "ALL" || (statusFilter === "AWAITING_REVIEW"
+            ? week.status === "SUBMITTED" || week.dayApprovals.some((day) => day.status === "PENDING") : week.status === statusFilter),
         )
         .sort((a, b) => employeeName(a).localeCompare(employeeName(b))),
     [weeks, selectedWeekStart, statusFilter],
   );
 
   const submittedWeeks = visibleWeeks.filter(
-    (week) => week.status === "SUBMITTED",
+    (week) => week.status === "SUBMITTED" || week.dayApprovals.some((day) => day.status === "PENDING"),
   );
 
   const reviewableRows = useMemo(() => {
@@ -271,11 +276,9 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
     for (const week of submittedWeeks) {
       for (const day of days) {
-        const hasEntry = week.entries.some(
-          (entry) => dateKey(entry.date) === day.iso,
-        );
+        const hasEntry = week.computed.days.some((item) => item.date === day.iso);
 
-        if (hasEntry) {
+        if (hasEntry && (week.status === "SUBMITTED" || week.dayApprovals.some((item) => dateKey(item.date) === day.iso && (item.status === "PENDING" || item.status === "APPROVED")))) {
           keys.push(rowKey(week.id, day.iso));
         }
       }
@@ -311,12 +314,30 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     });
   }
 
-  function approvePersonDay(key: string) {
-    setReviewedRows((current) => {
-      const next = new Set(current);
-      next.add(key);
-      return next;
-    });
+  async function reviewPersonDay(week: ApprovalWeek, date: string, action: "APPROVE" | "REJECT" | "REOPEN") {
+    const reason = action === "APPROVE" ? "" : window.prompt(`Reason to ${action.toLowerCase()} ${employeeName(week)}'s day (${formatDate(date)})? If already exported, notify Accounts and replace the download.`);
+    if (reason === null) return;
+    if (action !== "APPROVE" && !reason?.trim()) { setError("A reason is required."); return; }
+    setActingDay(rowKey(week.id, date)); setError(null);
+    try {
+      const response = await fetch("/api/day/review", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ weekId: week.id, date, action, comment: reason }) });
+      const data = await readJsonOrText(response);
+      if (!response.ok) throw new Error(data.error || "Could not review day");
+      setWeeks((current) => current.map((item) => item.id === week.id ? { ...item, status: data.week.status, dayApprovals: data.week.dayApprovals } : item));
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not review day"); }
+    finally { setActingDay(null); }
+  }
+
+  async function submitCutoff(week: ApprovalWeek, through: string) {
+    if (!window.confirm(`Submit ${employeeName(week)}'s days through ${formatDate(through)} for payroll review? Later days will stay open.`)) return;
+    setActing({ weekId: week.id, action: "SUBMIT_CUTOFF" }); setError(null);
+    try {
+      const response = await fetch("/api/week/submit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ weekId: week.id, through }) });
+      const data = await readJsonOrText(response);
+      if (!response.ok) throw new Error(data.error || "Could not submit payroll days");
+      setWeeks((current) => current.map((item) => item.id === week.id ? { ...item, status: data.week.status, dayApprovals: data.week.dayApprovals } : item));
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not submit payroll days"); }
+    finally { setActing(null); }
   }
 
   async function reviewWeek(
@@ -352,6 +373,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             ? {
                 ...week,
                 status: action === "APPROVE" ? "APPROVED" : "DRAFT",
+                dayApprovals: data.week.dayApprovals,
               }
             : week,
         ),
@@ -391,11 +413,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
     if (successful) {
       setComment("");
-      setReviewedRows((current) => {
-        const next = new Set(current);
-        for (const day of days) next.delete(rowKey(week.id, day.iso));
-        return next;
-      });
     }
   }
 
@@ -413,7 +430,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
     }
 
     const confirmed = window.confirm(
-      `Reopen ${employeeName(week)}'s week commencing ${formatDate(week.weekStart)}?\n\nThe week will return to Draft so it can be corrected and resubmitted.`,
+      `Reopen ${employeeName(week)}'s week commencing ${formatDate(week.weekStart)}?\n\nALL day approvals will be removed. If already exported, notify Accounts and replace the payroll download. To correct just one day, use Reopen day instead.`,
     );
 
     if (!confirmed) return;
@@ -426,11 +443,6 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
     if (successful) {
       setComment("");
-      setReviewedRows((current) => {
-        const next = new Set(current);
-        for (const day of days) next.delete(rowKey(week.id, day.iso));
-        return next;
-      });
     }
   }
 
@@ -454,8 +466,8 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             Weekly Approvals
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Approve each person&apos;s individual days, then approve that
-            person&apos;s week at the bottom.
+            Day approvals are saved and immediately available to Accounts. Payroll runs
+            from the 16th to the 15th. Approve the full week once the remaining days are submitted.
           </p>
         </div>
 
@@ -527,6 +539,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
             className="mt-1 w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
           >
             <option value="ALL">All statuses</option>
+            <option value="AWAITING_REVIEW">Awaiting review (including part weeks)</option>
             <option value="SUBMITTED">Submitted</option>
             <option value="APPROVED">Approved</option>
             <option value="DRAFT">Draft</option>
@@ -575,8 +588,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
             const reviewableDayKeys = dayRows
               .filter(
-                ({ week, entries }) =>
-                  week.status === "SUBMITTED" && entries.length > 0,
+                ({ week, computedDay }) => Boolean(computedDay) && (week.status === "SUBMITTED" || week.dayApprovals.some((item) => dateKey(item.date) === day.iso && (item.status === "PENDING" || item.status === "APPROVED"))),
               )
               .map(({ week }) => rowKey(week.id, day.iso));
 
@@ -624,9 +636,10 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                       {dayRows.map(({ week, entries, computedDay }) => {
                         const key = rowKey(week.id, day.iso);
                         const expanded = expandedRows.has(key);
-                        const reviewed = reviewedRows.has(key);
+                        const dayApproval = week.dayApprovals.find((item) => dateKey(item.date) === day.iso);
+                        const reviewed = week.status === "APPROVED" || reviewedRows.has(key);
                         const canApproveDay =
-                          week.status === "SUBMITTED" && entries.length > 0;
+                          !reviewed && (week.status === "SUBMITTED" || dayApproval?.status === "PENDING") && Boolean(computedDay);
 
                         const starts = entries
                           .map((entry) => entry.startTime)
@@ -664,27 +677,34 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                               : "";
 
                         return (
-                          <>
+                          <Fragment key={key}>
                             <tr
                               key={key}
                               className={`border-t border-slate-200 align-top ${rowBackground}`}
                             >
                               <td className="px-4 py-4">
-                                {canApproveDay ? (
+                                {reviewed ? (
+                                  <div className="space-y-2"><span className="font-semibold text-emerald-700">Approved ✓</span>
+                                    <button type="button" disabled={Boolean(actingDay) || Boolean(acting)} onClick={() => reviewPersonDay(week, day.iso, "REOPEN")} className="block text-xs text-amber-800 underline">Reopen day</button>
+                                  </div>
+                                ) : canApproveDay ? (
+                                  <div className="space-y-2">
                                   <button
                                     type="button"
-                                    onClick={() => approvePersonDay(key)}
-                                    disabled={reviewed}
+                                    onClick={() => reviewPersonDay(week, day.iso, "APPROVE")}
+                                    disabled={Boolean(actingDay) || Boolean(acting)}
                                     className={`min-w-[112px] rounded-lg px-3 py-2 text-xs font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-100 ${
                                       reviewed
                                         ? "bg-emerald-700"
                                         : "bg-emerald-500 hover:bg-emerald-400"
                                     }`}
                                   >
-                                    {reviewed ? "Approved ✓" : "Approve Day"}
+                                    {actingDay === key ? "Saving…" : "Approve Day"}
                                   </button>
+                                  <button type="button" disabled={Boolean(actingDay) || Boolean(acting)} onClick={() => reviewPersonDay(week, day.iso, "REJECT")} className="block text-xs text-red-700 underline">Reject day</button>
+                                  </div>
                                 ) : (
-                                  <span className="text-slate-300">—</span>
+                                  <span className="text-xs text-slate-500">{dayApproval?.status === "REJECTED" ? "Returned for correction" : "Not submitted"}</span>
                                 )}
                               </td>
 
@@ -808,7 +828,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                                 </div>
                                               ) : null}
 
-                                              <Link
+                                              {!reviewed && dayApproval?.status !== "PENDING" ? <Link
                                                 href={`/timesheet/entry/${encodeURIComponent(
                                                   entry.id,
                                                 )}?admin=1&adminWeekId=${encodeURIComponent(
@@ -817,7 +837,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                                 className="mt-3 inline-flex rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500"
                                               >
                                                 Edit
-                                              </Link>
+                                              </Link> : null}
                                             </div>
                                           </div>
                                         </div>
@@ -827,7 +847,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 </td>
                               </tr>
                             ) : null}
-                          </>
+                          </Fragment>
                         );
                       })}
                     </tbody>
@@ -864,11 +884,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
               <tbody>
                 {visibleWeeks.map((week) => {
                   const weekDayKeys = days
-                    .filter((day) =>
-                      week.entries.some(
-                        (entry) => dateKey(entry.date) === day.iso,
-                      ),
-                    )
+                    .filter((day) => week.computed.days.some((item) => item.date === day.iso))
                     .map((day) => rowKey(week.id, day.iso));
                   const approvedDayCount = weekDayKeys.filter((key) =>
                     reviewedRows.has(key),
@@ -876,6 +892,8 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                   const allWeekDaysApproved =
                     weekDayKeys.length > 0 &&
                     approvedDayCount === weekDayKeys.length;
+                  const cutoff = days.find((day) => day.iso.endsWith("-15"))?.iso;
+                  const canSubmitCutoff = cutoff && week.computed.days.some((day) => day.date <= cutoff && !week.dayApprovals.some((item) => dateKey(item.date) === day.date && (item.status === "APPROVED" || item.status === "PENDING")));
 
                   return (
                     <tr key={week.id} className="border-t border-slate-200">
@@ -883,7 +901,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                         <div className="font-semibold">
                           {employeeName(week)}
                         </div>
-                        {week.status === "SUBMITTED" ? (
+                        {week.status !== "APPROVED" ? (
                           <div className="mt-1 text-[11px] text-slate-500">
                             {approvedDayCount} of {weekDayKeys.length} days approved
                           </div>
@@ -929,7 +947,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 type="button"
                                 onClick={() => approveWeek(week)}
                                 disabled={
-                                  !allWeekDaysApproved || Boolean(acting)
+                                  !allWeekDaysApproved || Boolean(acting) || Boolean(actingDay)
                                 }
                                 className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
                               >
@@ -952,7 +970,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 : "Reopen Week"}
                             </button>
                           ) : (
-                            <span className="text-slate-400">—</span>
+                            cutoff && canSubmitCutoff ? <button type="button" onClick={() => submitCutoff(week, cutoff)} disabled={Boolean(acting) || Boolean(actingDay)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit up to 15th</button> : <span className="text-slate-400">—</span>
                           )}
                         </div>
                       </td>

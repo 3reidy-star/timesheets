@@ -31,6 +31,7 @@ type Week = {
   weekStart: string;
   status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
   entries: Entry[];
+  dayApprovals: { date: string; status: string; comment: string | null }[];
 };
 
 type ComputedDay = {
@@ -366,6 +367,11 @@ export default function TimesheetPage() {
 
   const isDraft = week?.status === "DRAFT";
   const canSubmitWeek = isDraft && (week?.entries?.length ?? 0) > 0 && !loading && !submitting;
+  const cutoffDate = days.find((day) => day.iso.endsWith("-15"))?.iso;
+  const canSubmitCutoff = Boolean(cutoffDate && canSubmitWeek && week?.entries.some((entry) => dateKey(entry.date) <= cutoffDate && !week.dayApprovals?.some((day) => dateKey(day.date) === dateKey(entry.date) && (day.status === "APPROVED" || day.status === "PENDING"))));
+  function dayLocked(date: string) {
+    return week?.status === "APPROVED" || week?.dayApprovals?.some((day) => dateKey(day.date) === date && (day.status === "APPROVED" || day.status === "PENDING"));
+  }
 
   async function deleteEntry(entry: Entry, dayEntryCount: number) {
     if (!week || deletingEntryId) return;
@@ -404,19 +410,19 @@ export default function TimesheetPage() {
     }
   }
 
-  async function submitWeek() {
+  async function submitWeek(through?: string) {
     if (!week || !canSubmitWeek) return;
+    if (!window.confirm(through ? `Submit days up to ${shortDate(through)} for payroll? Later days will stay open.` : "Submit the entire week? Remaining unapproved days will be locked for review.")) return;
     setErr(null);
     setSubmitting(true);
     try {
       const r = await fetch("/api/week/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ weekId: week.id }),
+        body: JSON.stringify({ weekId: week.id, through }),
       });
       const data = await readJsonOrText(r);
       if (!r.ok) throw new Error((data as any)?.error ?? "Failed to submit week");
-      setWeek((prev) => (prev ? { ...prev, status: "SUBMITTED" } : prev));
       await loadWeek();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to submit week");
@@ -515,7 +521,7 @@ export default function TimesheetPage() {
           {isDraft ? (
             <button
               type="button"
-              onClick={submitWeek}
+              onClick={() => submitWeek()}
               disabled={!canSubmitWeek}
               className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-50"
             >
@@ -526,8 +532,13 @@ export default function TimesheetPage() {
               Submitted ✓
             </div>
           )}
+          {cutoffDate && isDraft ? <button type="button" onClick={() => submitWeek(cutoffDate)} disabled={!canSubmitCutoff} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Submit up to 15th for payroll</button> : null}
         </div>
       </div>
+      {week?.dayApprovals?.length ? <div className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900">
+        Payroll runs from the 16th to the 15th. Submitted and approved days are locked; other days in this open week can still be entered.
+        <div className="mt-2 flex flex-wrap gap-3">{week.dayApprovals.map((day) => <span key={day.date}>{shortDate(dateKey(day.date))}: {day.status === "PENDING" ? "Submitted" : day.status === "APPROVED" ? "Approved" : `Returned${day.comment ? ` — ${day.comment}` : ""}`}</span>)}</div>
+      </div> : null}
 
       {err ? (
         <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{err}</div>
@@ -776,7 +787,7 @@ export default function TimesheetPage() {
                                 </div>
                               </div>
 
-                              {isDraft || week.status === "REJECTED" ? (
+                              {(isDraft || week.status === "REJECTED") && !dayLocked(dateKey(e.date)) ? (
                                 <div className="flex items-center justify-end gap-2">
                                   <Link
                                     href={`/timesheet/entry/${encodeURIComponent(e.id)}`}
@@ -892,7 +903,7 @@ export default function TimesheetPage() {
                               ) : null}
                             </div>
 
-                            {isDraft || week.status === "REJECTED" ? (
+                            {(isDraft || week.status === "REJECTED") && !dayLocked(dateKey(e.date)) ? (
                               <div className="flex shrink-0 flex-col gap-2">
                                 <Link
                                   href={`/timesheet/entry/${encodeURIComponent(e.id)}`}

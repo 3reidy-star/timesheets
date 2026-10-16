@@ -44,7 +44,7 @@ export default async function AdminApprovalsPage() {
   if (
     !currentUser ||
     !currentUser.active ||
-    currentUser.role !== "ADMIN"
+    !["ADMIN", "ACCOUNTS"].includes(currentUser.role)
   ) {
     redirect("/timesheet");
   }
@@ -72,6 +72,7 @@ export default async function AdminApprovalsPage() {
       },
     ],
     include: {
+      dayApprovals: true,
       user: {
         select: {
           id: true,
@@ -97,12 +98,13 @@ export default async function AdminApprovalsPage() {
   const formattedWeeks: ApprovalWeek[] = weeks
     .filter((week) => week.user?.active)
     .map((week) => {
-      const computed = calcWeekTotals(week.entries);
+      const computed = calcWeekTotals(week.entries, week.weekStart);
 
       return {
         id: week.id,
         weekStart: toIso(week.weekStart),
         status: String(week.status),
+        dayApprovals: week.dayApprovals.map((day) => ({ date: toIso(day.date), status: day.status, comment: day.comment })),
 
         user: {
           id: week.user.id,

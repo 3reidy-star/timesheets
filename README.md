@@ -2,6 +2,16 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+### Payroll approval (16th–15th)
+
+- In the cutoff week, employees can **Submit up to 15th for payroll**. Administrators can submit on their behalf from **Weekly Approvals → Employee Week Totals → Submit up to 15th**.
+- **Approve Day** saves approval with the reviewer and time. Accounts can download those dates while the remaining days stay open. The default payroll period is the 16th–15th, based on the London date.
+- Complete normal whole-week submission and approval afterward. Previously approved dates stay approved. The existing weekly business top-up is finalized only after whole-week approval and belongs to Friday's payroll period; replace earlier downloads if final approval changes their totals.
+- **Reopen day** requires a reason and removes that day from payroll until it is resubmitted and reapproved, preserving other approvals. **Reopen Week** clears every day approval. Notify Accounts and replace affected downloads after corrections.
+- `/approvals` redirects to `/admin/approvals`, avoiding the obsolete client screen's missing-totals error. Administrators and Accounts can use the current screen.
+- Uses the existing `DayApproval` model; no schema change or database reset. Production must match `prisma/schema.prisma`.
+- Run `npm run test:payroll` (mocked database; no emails) and `npm run build` before publishing.
+
 First, run the development server:
 
 ```bash

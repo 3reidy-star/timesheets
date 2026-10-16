@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
+import { approvedPayrollEntries } from "@/app/lib/payrollData";
 import { NextResponse } from "next/server";
 import {
   PDFDocument,
@@ -26,19 +27,19 @@ type Column = {
 };
 
 function startOfDay(value: string) {
-  return new Date(`${value}T00:00:00`);
+  return new Date(`${value}T00:00:00Z`);
 }
 
 function endOfDay(value: string) {
-  return new Date(`${value}T23:59:59.999`);
+  return new Date(`${value}T23:59:59.999Z`);
 }
 
 function formatDate(date: Date) {
-  return date.toLocaleDateString("en-GB");
+  return date.toLocaleDateString("en-GB", { timeZone: "UTC" });
 }
 
 function formatDay(date: Date) {
-  return date.toLocaleDateString("en-GB", { weekday: "long" });
+  return date.toLocaleDateString("en-GB", { timeZone: "UTC", weekday: "long" });
 }
 
 function formatTime(value: string | Date | null) {
@@ -269,25 +270,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const entries = await prisma.timesheetEntry.findMany({
-      where: {
-        date: {
-          gte: fromDate,
-          lte: toDate,
-        },
-        week: {
-          status: "APPROVED",
-          ...(isAllEmployees ? {} : { userId }),
-        },
-      },
-      include: {
-        week: {
-          include: {
-            user: true,
-          },
-        },
-      },
-    });
+    const entries = await approvedPayrollEntries(fromDate, toDate, isAllEmployees ? undefined : userId);
 
     entries.sort((a, b) => {
       const employeeA = (a.week.user.name || a.week.user.email || "").toLowerCase();

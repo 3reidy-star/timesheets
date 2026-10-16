@@ -3,6 +3,9 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { prisma } from "@/app/lib/prisma";
+import { lockWeeks, ApprovalConflict } from "@/app/lib/dayApprovalLock";
+import { calcWeekTotals } from "@/app/lib/timesheetTotals";
+import { parsePayrollDate } from "@/app/lib/payrollApproval";
 
 function getString(v: unknown) {
   return typeof v === "string" ? v.trim() : "";
@@ -22,10 +25,11 @@ export async function POST(req: Request) {
         id: true,
         email: true,
         role: true,
+        active: true,
       },
     });
 
-    if (!reviewer) {
+    if (!reviewer || !reviewer.active) {
       return NextResponse.json({ error: "User not found" }, { status: 403 });
     }
 
@@ -96,10 +100,29 @@ export async function POST(req: Request) {
       action === "REOPEN" ? `Approved week reopened: ${comment}` : comment;
 
     const result = await prisma.$transaction(async (tx) => {
+      await lockWeeks(tx, [weekId]);
+      const current = await tx.timesheetWeek.findUniqueOrThrow({ where: { id: weekId }, include: { entries: true, dayApprovals: true } });
+      if (current.status !== (action === "REOPEN" ? "APPROVED" : "SUBMITTED")) throw new ApprovalConflict("The week status has changed. Refresh and try again.");
+      if (action === "APPROVE") {
+        const days = calcWeekTotals(current.entries, current.weekStart).days;
+        if (!days.length) throw new ApprovalConflict("There are no days to approve.");
+        for (const day of days) {
+          const date = parsePayrollDate(day.date)!;
+          await tx.dayApproval.upsert({
+            where: { weekId_date: { weekId, date } },
+            create: { weekId, date, status: "APPROVED", reviewedById: reviewer.id, reviewedAt: new Date() },
+            update: { status: "APPROVED", reviewedById: reviewer.id, reviewedAt: new Date() },
+          });
+        }
+      } else if (action === "REOPEN") {
+        await tx.dayApproval.deleteMany({ where: { weekId } });
+      } else {
+        await tx.dayApproval.deleteMany({ where: { weekId, status: { not: "APPROVED" } } });
+      }
       const updated = await tx.timesheetWeek.update({
         where: { id: weekId },
         data: { status: newStatus },
-        select: { id: true, status: true, weekStart: true },
+        include: { dayApprovals: true },
       });
 
       await tx.weekAudit.create({
@@ -114,11 +137,11 @@ export async function POST(req: Request) {
       return updated;
     });
 
-    return NextResponse.json({ ok: true, week: result });
+    return NextResponse.json({ ok: true, status: result.status, week: result });
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message ?? "Failed to review week" },
-      { status: 500 }
+      { status: err instanceof ApprovalConflict ? 409 : 500 }
     );
   }
 }

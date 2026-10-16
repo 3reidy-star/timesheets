@@ -13,10 +13,10 @@ function getString(v: unknown) {
 
 function startOfWeekMonday(d: Date) {
   const date = new Date(d);
-  const day = date.getDay();
+  const day = date.getUTCDay();
   const diff = (day === 0 ? -6 : 1) - day;
-  date.setDate(date.getDate() + diff);
-  date.setHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + diff);
+  date.setUTCHours(0, 0, 0, 0);
   return date;
 }
 
@@ -56,6 +56,7 @@ export async function GET(req: Request) {
       existing = await prisma.timesheetWeek.findUnique({
         where: { id: weekId },
         include: {
+          dayApprovals: true,
           user: {
             select: {
               id: true,
@@ -75,7 +76,7 @@ export async function GET(req: Request) {
     } else {
       const requested =
         weekStartParam && !Number.isNaN(new Date(weekStartParam).getTime())
-          ? new Date(`${weekStartParam}T00:00:00`)
+          ? new Date(`${weekStartParam}T00:00:00Z`)
           : null;
 
       const weekStart = requested
@@ -90,6 +91,7 @@ export async function GET(req: Request) {
           },
         },
         include: {
+          dayApprovals: true,
           user: {
             select: {
               id: true,
@@ -111,6 +113,7 @@ export async function GET(req: Request) {
             status: "DRAFT",
           },
           include: {
+            dayApprovals: true,
             user: {
               select: {
                 id: true,

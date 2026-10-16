@@ -3,23 +3,24 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { calcWeekTotals } from "@/app/lib/timesheetTotals";
+import { isPayrollDayApproved } from "@/app/lib/payrollApproval";
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 
 function startOfDay(value: string) {
-  return new Date(`${value}T00:00:00`);
+  return new Date(`${value}T00:00:00Z`);
 }
 
 function endOfDay(value: string) {
-  return new Date(`${value}T23:59:59.999`);
+  return new Date(`${value}T23:59:59.999Z`);
 }
 
 function formatDate(date: Date) {
-  return date.toLocaleDateString("en-GB");
+  return date.toLocaleDateString("en-GB", { timeZone: "UTC" });
 }
 
 function formatLongDate(date: Date) {
-  return date.toLocaleDateString("en-GB", {
+  return date.toLocaleDateString("en-GB", { timeZone: "UTC",
     day: "2-digit",
     month: "long",
     year: "numeric",
@@ -27,7 +28,7 @@ function formatLongDate(date: Date) {
 }
 
 function formatDay(date: Date) {
-  return date.toLocaleDateString("en-GB", {
+  return date.toLocaleDateString("en-GB", { timeZone: "UTC",
     weekday: "long",
   });
 }
@@ -54,16 +55,16 @@ function safeFileName(value: string) {
 }
 
 function dateKey(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 }
 
 function addDays(dateInput: Date, days: number) {
   const date = new Date(dateInput);
-  date.setDate(date.getDate() + days);
+  date.setUTCDate(date.getUTCDate() + days);
   return date;
 }
 
@@ -185,13 +186,14 @@ export async function GET(req: Request) {
     const weeks = await prisma.timesheetWeek.findMany({
       where: {
         userId,
-        status: "APPROVED",
+        OR: [{ status: "APPROVED" }, { dayApprovals: { some: { status: "APPROVED", date: { gte: fromDate, lte: toDate } } } }],
         weekStart: {
           gte: weekSearchStart,
           lte: toDate,
         },
       },
       include: {
+        dayApprovals: { include: { reviewedBy: { select: { name: true, email: true } } } },
         entries: {
           orderBy: [
             {
@@ -257,10 +259,11 @@ export async function GET(req: Request) {
     }[] = [];
 
     for (const week of weeks) {
-      const computed = calcWeekTotals(week.entries);
+      const computed = calcWeekTotals(week.entries, week.weekStart);
 
       for (const entry of week.entries) {
         if (entry.date < fromDate || entry.date > toDate) continue;
+        if (!isPayrollDayApproved(week, entry.date)) continue;
 
         const key = dateKey(entry.date);
         const current = entriesByDate.get(key) || [];
@@ -273,6 +276,7 @@ export async function GET(req: Request) {
         const dayDate = startOfDay(day.date);
 
         if (dayDate < fromDate || dayDate > toDate) continue;
+        if (!isPayrollDayApproved(week, dayDate)) continue;
 
         computedDayByDate.set(day.date, day);
 
@@ -289,7 +293,7 @@ export async function GET(req: Request) {
        * single payroll-period owner where a week crosses the 16th/15th boundary.
        */
       const topUpDate = fridayOfWeek(week.weekStart);
-      const topUp = Number(computed.totals.businessTopUpHours || 0);
+      const topUp = week.status === "APPROVED" ? Number(computed.totals.businessTopUpHours || 0) : 0;
 
       if (topUpDate >= fromDate && topUpDate <= toDate && topUp > 0) {
         const key = dateKey(topUpDate);
@@ -303,17 +307,22 @@ export async function GET(req: Request) {
         periodPaid += topUp;
       }
 
-      const audit = week.audits[0];
+      const audit = week.status === "APPROVED" ? week.audits[0] : null;
+      const dayAudit = week.dayApprovals.filter((day) => day.status === "APPROVED" && day.date >= fromDate && day.date <= toDate)
+        .sort((a, b) => (b.reviewedAt?.getTime() || 0) - (a.reviewedAt?.getTime() || 0))[0];
 
       approvalRows.push({
         weekStart: week.weekStart,
         approvedBy:
           audit?.performedBy?.name?.trim() ||
           audit?.performedBy?.email ||
-          "Approved week status",
-        approvedAt: audit?.createdAt || null,
+          dayAudit?.reviewedBy?.name || dayAudit?.reviewedBy?.email || "Approved day status",
+        approvedAt: audit?.createdAt || dayAudit?.reviewedAt || null,
         businessTopUp: topUp,
-        paidHours: Number(computed.totals.paidHours || 0),
+        paidHours: computed.days.filter((day) => {
+          const date = startOfDay(day.date);
+          return date >= fromDate && date <= toDate && isPayrollDayApproved(week, date);
+        }).reduce((sum, day) => sum + day.paidHours, 0) + (topUpDate >= fromDate && topUpDate <= toDate ? topUp : 0),
       });
     }
 
@@ -384,7 +393,7 @@ export async function GET(req: Request) {
         "Payroll Status:",
         weeks.length > 0
           ? "APPROVED FOR PAYROLL"
-          : "NO APPROVED WEEKS",
+          : "NO APPROVED DAYS",
       ],
       [
         "Approved By:",
@@ -529,10 +538,10 @@ export async function GET(req: Request) {
     let rowNumber = headerRowNumber + 1;
 
     let cursor = new Date(fromDate);
-    cursor.setHours(0, 0, 0, 0);
+    cursor.setUTCHours(0, 0, 0, 0);
 
     const endCursor = new Date(toDate);
-    endCursor.setHours(0, 0, 0, 0);
+    endCursor.setUTCHours(0, 0, 0, 0);
 
     while (cursor <= endCursor) {
       const key = dateKey(cursor);
@@ -616,7 +625,7 @@ export async function GET(req: Request) {
 
       row.getCell(10).numFmt = "0";
 
-      if (cursor.getDay() === 0 || cursor.getDay() === 6) {
+      if (cursor.getUTCDay() === 0 || cursor.getUTCDay() === 6) {
         for (let column = 1; column <= 12; column += 1) {
           row.getCell(column).fill = {
             type: "pattern",
