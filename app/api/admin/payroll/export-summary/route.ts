@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
-import { calcWeekTotals } from "@/app/lib/timesheetTotals";
+import { calcWeekTotals, usesActualHours } from "@/app/lib/timesheetTotals";
 import { isPayrollDayApproved } from "@/app/lib/payrollApproval";
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
@@ -69,7 +69,7 @@ export async function GET(req: Request) {
         }
         const topUpDate = fridayOfWeek(week.weekStart); if (week.status === "APPROVED" && topUpDate >= fromDate && topUpDate <= toDate) weekdayOvertime += Number(computed.totals.businessTopUpHours || 0);
       }
-      const basicHours = metadata.basicHours ? round2(regularHours) : null;
+      const basicHours = metadata.basicHours || usesActualHours(user) ? round2(regularHours) : null;
       const row = sheet.addRow([metadata.payrollNumber ?? null, metadata.title || null, firstName || null, surname || null, null, basicHours && basicHours !== 0 ? basicHours : null, weekdayOvertime ? round2(weekdayOvertime) : null, saturdayOvertime ? round2(saturdayOvertime) : null, sundayOvertime ? round2(sundayOvertime) : null, overnightStays || null, holidayDays ? round2(holidayDays) : null, null]);
       row.getCell(1).numFmt = "0"; for (const column of [6, 7, 8, 9, 11]) row.getCell(column).numFmt = "0.##"; row.getCell(10).numFmt = "0";
     }

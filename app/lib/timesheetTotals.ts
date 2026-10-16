@@ -118,14 +118,32 @@ function computeEntryWeekdayOT(entry: TimesheetEntryForTotals) {
   return round2(otMin / 60);
 }
 
+type PayrollEmployee = { name?: string | null };
+
+export function usesActualHours(employee?: PayrollEmployee) {
+  const name = employee?.name?.trim().replace(/\s+/g, " ").toLowerCase();
+  return name === "becky lawrence";
+}
+
 export function calcWeekTotals(
   entries: TimesheetEntryForTotals[],
   _weekStartInput?: Date | string | null,
-  employee?: { name?: string | null },
+  employee?: PayrollEmployee,
 ) {
+  const actualHoursOnly = usesActualHours(employee);
   const byDay = new Map<string, TimesheetEntryForTotals[]>();
 
-  for (const entry of entries) {
+  for (const storedEntry of entries) {
+    let entry = storedEntry;
+    if (actualHoursOnly && isWorkingType(entry.type) && entry.jobAndKnock) {
+      const start = parseHHMM(entry.startTime);
+      const finish = parseHHMM(entry.finishTime);
+      if (start !== null && finish !== null) {
+        const spanHours = ((finish < start ? finish + 1440 : finish) - start) / 60;
+        const breakHours = !entry.leftEarlyByChoice && spanHours >= 6 ? BREAK_HOURS : 0;
+        entry = { ...entry, hours: round2(Math.max(0, spanHours - breakHours)), jobAndKnock: false };
+      }
+    }
     const key = dayKeyUTC(entry.date);
     byDay.set(key, [...(byDay.get(key) ?? []), entry]);
   }
@@ -171,7 +189,27 @@ export function calcWeekTotals(
       let otSatHours = 0;
       let otSunBhHours = 0;
 
-      if (bankHoliday) {
+      if (actualHoursOnly) {
+        // Stored hours already include the entry's break deduction. Never
+        // inflate these to a standard day or apply job-and-knock guarantees.
+        regularHours = paidNonWorkingHours;
+        if (bankHoliday || dow === 0) otSunBhHours = workedHours;
+        else if (dow === 6) otSatHours = workedHours;
+        else {
+          otMonFriHours = round2(Math.min(workedHours, workingEntries.reduce(
+            (sum, entry) => sum + computeEntryWeekdayOT(entry), 0,
+          )));
+          regularHours = round2(regularHours + workedHours - otMonFriHours);
+        }
+        corePaidHours = regularHours;
+        breakHours = round2(workingEntries.reduce((sum, entry) => {
+          const start = parseHHMM(entry.startTime);
+          const finish = parseHHMM(entry.finishTime);
+          if (start === null || finish === null) return sum;
+          const span = (finish < start ? finish + 1440 : finish) - start;
+          return sum + Math.max(0, span / 60 - (Number(entry.hours) || 0));
+        }, 0));
+      } else if (bankHoliday) {
         // Holiday pay requires an explicit paid non-working entry. A calendar
         // bank holiday alone does not establish an employee's entitlement.
         regularHours = paidNonWorkingHours;
@@ -307,7 +345,7 @@ export function calcWeekTotals(
   const hasAnyLeftEarlyByChoice = days.some((day) => day.leftEarlyByChoice);
   // Alex Smith's agreed pay excludes the weekly half-hour top-up.
   const employeeName = employee?.name?.trim().replace(/\s+/g, " ").toLowerCase();
-  const receivesBusinessTopUp = employeeName !== "alex smith";
+  const receivesBusinessTopUp = employeeName !== "alex smith" && !actualHoursOnly;
   const businessTopUpHours = !receivesBusinessTopUp || hasAnyLeftEarlyByChoice || days.length === 0 ? 0 : BUSINESS_TOP_UP_HOURS;
 
   return {
@@ -330,6 +368,7 @@ export function calcWeekTotals(
       hasAnyLeftEarlyByChoice,
     },
     rules: {
+      actualHoursOnly,
       weeklyCorePaidHours: 37,
       businessTopUpHours,
       monThu: { coreWindow: "08:30-17:00", corePaidHours: 8 },

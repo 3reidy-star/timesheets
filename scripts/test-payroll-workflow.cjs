@@ -188,6 +188,35 @@ async function summary(from,to) {
   assert.equal(alexApprovals.props.initialWeeks[0].computed.totals.businessTopUpHours,0,'Approvals excludes Alex top-up');
   owner.name = 'Test Employee';
   assert.equal((await summary('2026-10-16','2026-11-15')).getCell(7).value,5.5,'Other employees retain top-up');
+  // Becky receives entered hours, without standard-day or weekly top-ups.
+  const beforeBecky = structuredClone(week);
+  const savedOwner = {...owner};
+  owner.name = 'Becky Lawrence';
+  week.user = owner;
+  week.entries = [12,16].map(day => ({...entry(day),startTime:'09:00',finishTime:'14:45',hours:5.75}));
+  const becky = load('app/lib/timesheetTotals.ts').calcWeekTotals;
+  const beckyTotals = becky(week.entries,week.weekStart,owner);
+  assert.equal(beckyTotals.totals.paidHours,11.5,'Becky receives 5.75 hours on both Monday and Friday');
+  assert.equal(beckyTotals.totals.businessTopUpHours,0);
+  assert.equal(beckyTotals.days[0].breakHours,0,'Do not invent a break for a short shift');
+  assert.equal(becky([{...entry(12),hours:8.5,startTime:'09:00',finishTime:'18:00'}],week.weekStart,owner).totals.paidHours,8.5,'Do not deduct the stored break twice');
+  assert.equal(becky([{...entry(12),hours:8,startTime:'09:00',finishTime:'12:00',jobAndKnock:true}],week.weekStart,owner).totals.paidHours,3,'Job and knock cannot inflate Becky pay');
+  assert.equal(becky([{...entry(17),hours:3}],week.weekStart,owner).totals.paidHours,3,'Weekend pay remains exact');
+  assert.equal(becky(week.entries,week.weekStart,{name:' BECKY  LAWRENCE '}).totals.paidHours,11.5,'Employee name matching ignores casing and whitespace');
+  const beckySummary = await summary('2026-10-12','2026-10-18');
+  assert.equal(beckySummary.getCell(6).value,10.75,'Payroll summary shows Becky actual basic hours');
+  assert.equal(beckySummary.getCell(7).value,0.75,'Friday overtime stays within the actual paid hours');
+  const beckyExport = await load('app/api/admin/payroll/export/route.ts').GET(new Request('http://localhost/api?from=2026-10-12&to=2026-10-18&userId=u'));
+  assert.equal(beckyExport.status,200);
+  const beckyWorkbook = new ExcelJS.Workbook(); await beckyWorkbook.xlsx.load(Buffer.from(await beckyExport.arrayBuffer()));
+  assert.equal(beckyWorkbook.worksheets[0].getCell('J7').value,0);
+  assert.equal(beckyWorkbook.worksheets[0].getCell('J9').value,11.5,'Detailed payroll pays only entered hours');
+  const beckyApprovals = await approvalsPage();
+  assert.equal(beckyApprovals.props.initialWeeks[0].computed.totals.paidHours,11.5);
+  actor = owner;
+  const beckyOwnWeek = await load('app/api/week/route.ts').GET(new Request('http://localhost/api?weekStart=2026-10-12'));
+  assert.equal((await beckyOwnWeek.json()).computed.totals.paidHours,11.5);
+  Object.assign(owner,savedOwner); week=beforeBecky; admin();
   week.dayApprovals=[]; // compatibility with historical whole-week approvals
   await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'REOPEN',comment:'Historical correction'},200);
   assert.equal(payroll.isPayrollDayApproved(enriched(),date('2026-10-16')),true);

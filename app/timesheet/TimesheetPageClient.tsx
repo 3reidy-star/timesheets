@@ -69,6 +69,7 @@ type ComputedWeek = {
   days: ComputedDay[];
   totals: ComputedTotals;
   rules?: {
+    actualHoursOnly?: boolean;
     weeklyCorePaidHours?: number;
     businessTopUpHours?: number;
     monThu?: { coreWindow: string; corePaidHours: number };
@@ -432,6 +433,9 @@ export default function TimesheetPage() {
   }
 
   const helpText = useMemo(() => {
+    if (computed?.rules?.actualHoursOnly) {
+      return "* Pay uses the recorded hours after any entry break deduction, with no standard-day uplift or business top-up.";
+    }
     if (totals.hasAnyLeftEarlyByChoice) {
       return "* Payroll includes at least one left-early-by-choice entry, so those days are paid from actual stored regular/overtime hours with no business top-up.";
     }
