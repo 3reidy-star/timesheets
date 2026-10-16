@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "prisma generate && node scripts/ensure-day-approval.cjs && next build",
     "start": "next start",
     "lint": "eslint",
     "test:payroll": "node scripts/test-payroll-workflow.cjs",
+    "test:payroll-schema": "node scripts/test-day-approval-schema.cjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:reset": "prisma migrate reset",
