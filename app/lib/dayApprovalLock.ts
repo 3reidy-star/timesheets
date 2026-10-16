@@ -13,7 +13,7 @@ export async function lockWeeks(tx: Prisma.TransactionClient, ids: string[]) {
 
 export async function withEditableDays<T>(
   days: { weekId: string; date: Date }[],
-  isAdmin: boolean,
+  _isAdmin: boolean,
   write: (tx: Prisma.TransactionClient) => Promise<T>,
   expectedEntry?: { id: string; weekId: string; date: Date },
 ) {
@@ -29,7 +29,7 @@ export async function withEditableDays<T>(
     for (const day of days) {
       const week = await tx.timesheetWeek.findUnique({ where: { id: day.weekId } });
       const approval = await tx.dayApproval.findUnique({ where: { weekId_date: day } });
-      if (!week || week.status === "APPROVED" || (!isAdmin && week.status === "SUBMITTED") ||
+      if (!week || week.status === "APPROVED" || week.status === "SUBMITTED" ||
           approval?.status === "APPROVED" || approval?.status === "PENDING") {
         throw new ApprovalConflict("This day is submitted or approved. Ask an administrator to reopen it before making changes.");
       }

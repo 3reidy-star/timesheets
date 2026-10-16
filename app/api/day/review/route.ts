@@ -41,16 +41,16 @@ export async function POST(req: Request) {
       if (action !== "REOPEN" && current.status !== "SUBMITTED" && previous?.status !== "PENDING") {
         throw new ApprovalConflict("This day must be submitted before review");
       }
-      if (action === "REOPEN" && current.status !== "APPROVED" && previous?.status !== "APPROVED" && previous?.status !== "PENDING") {
+      if (action === "REOPEN" && current.status !== "APPROVED" && current.status !== "SUBMITTED" && previous?.status !== "APPROVED" && previous?.status !== "PENDING") {
         throw new ApprovalConflict("Only submitted or approved days can be reopened");
       }
       // Preserve other dates in historical whole-week approvals.
-      if (current.status === "APPROVED") {
+      if (current.status === "APPROVED" || current.status === "SUBMITTED") {
         for (const day of days) {
           const dayDate = parsePayrollDate(day.date)!;
           await tx.dayApproval.upsert({
             where: { weekId_date: { weekId, date: dayDate } },
-            create: { weekId, date: dayDate, status: "APPROVED" }, update: {},
+            create: { weekId, date: dayDate, status: current.status === "APPROVED" ? "APPROVED" : "PENDING" }, update: {},
           });
         }
       }

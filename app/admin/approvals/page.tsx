@@ -25,7 +25,9 @@ function startOfWeekMonday(dateInput: Date) {
   return date;
 }
 
-export default async function AdminApprovalsPage() {
+export default async function AdminApprovalsPage({ searchParams }: {
+  searchParams?: Promise<{ weekStart?: string }>;
+} = {}) {
   const session = await auth();
 
   if (!session?.user?.email) {
@@ -161,5 +163,6 @@ export default async function AdminApprovalsPage() {
       };
     });
 
-  return <AdminApprovalsPageClient initialWeeks={formattedWeeks} />;
+  const params = searchParams ? await searchParams : {};
+  return <AdminApprovalsPageClient initialWeeks={formattedWeeks} initialWeekStart={params.weekStart} />;
 }

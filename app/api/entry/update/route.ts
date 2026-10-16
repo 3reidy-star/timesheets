@@ -195,11 +195,7 @@ export async function POST(request: Request) {
 
     const existing = await prisma.timesheetEntry.findUnique({
       where: { id },
-      select: {
-        id: true,
-        userId: true,
-        weekId: true,
-        date: true,
+      include: {
         week: {
           select: {
             id: true,
@@ -217,6 +213,33 @@ export async function POST(request: Request) {
 
     if (!isOwner && !isAdminEditor) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+    }
+
+    // Approval-screen corrections change clocks only. Preserve the employee,
+    // date, job, notes, allowance, rate and special payroll flags server-side.
+    if (body?.timesOnly === true) {
+      if (!isAdminEditor) return NextResponse.json({ error: "Not authorised" }, { status: 403 });
+      if (existing.type !== "WORK" && existing.type !== "TRAINING") {
+        return NextResponse.json({ error: "Use Edit entry to change holiday or sickness details" }, { status: 400 });
+      }
+      const startTime = toString(body.startTime);
+      const finishTime = toString(body.finishTime);
+      const start = parseHHMM(startTime);
+      const finish = parseHHMM(finishTime);
+      if (start === null || finish === null || start % 15 !== 0 || finish % 15 !== 0 || start === finish) {
+        return NextResponse.json({ error: "Choose different start and finish times in 15-minute steps" }, { status: 400 });
+      }
+      const calculated = existing.jobAndKnock
+        ? calcJobAndKnockHours(existing.date, startTime, finishTime)
+        : calcWorkHours(existing.date, startTime, finishTime, existing.leftEarlyByChoice);
+      await withEditableDays([{ weekId: existing.weekId, date: existing.date }], true, async (tx) => {
+        await tx.timesheetEntry.update({ where: { id }, data: { startTime, finishTime, ...calculated } });
+        await tx.weekAudit.create({ data: {
+          weekId: existing.weekId, action: "EDITED", performedById: user.id,
+          comment: `Approval-screen time correction: ${existing.date.toISOString().slice(0, 10)}; ${existing.job}; entry ${id}; ${existing.startTime}–${existing.finishTime} → ${startTime}–${finishTime}.`,
+        } });
+      }, existing);
+      return NextResponse.json({ ok: true, weekId: existing.weekId });
     }
 
     if (!isAdminEditor && existing.week?.status !== "DRAFT") {

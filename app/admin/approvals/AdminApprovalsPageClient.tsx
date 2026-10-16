@@ -61,11 +61,14 @@ export type ApprovalWeek = {
 
 type Props = {
   initialWeeks: ApprovalWeek[];
+  initialWeekStart?: string;
 };
+
+type EditingTimes = { weekId: string; entryId: string; startTime: string; finishTime: string };
 
 type ActingState = {
   weekId: string;
-  action: "APPROVE" | "REJECT" | "REOPEN" | "SUBMIT_CUTOFF";
+  action: "APPROVE" | "REJECT" | "REOPEN" | "SUBMIT_CUTOFF" | "SUBMIT_WEEK";
 } | null;
 
 const DAY_NAMES = [
@@ -214,7 +217,7 @@ async function readJsonOrText(response: Response) {
   return { error: (await response.text()).slice(0, 1200) };
 }
 
-export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
+export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStart }: Props) {
   const currentMonday = formatInputDate(startOfWeekMonday(new Date()));
 
   const availableWeekStarts = useMemo(
@@ -227,7 +230,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
   const [weeks, setWeeks] = useState(initialWeeks);
   const [selectedWeekStart, setSelectedWeekStart] = useState(
-    availableWeekStarts.includes(currentMonday)
+    initialWeekStart && availableWeekStarts.includes(initialWeekStart) ? initialWeekStart : availableWeekStarts.includes(currentMonday)
       ? currentMonday
       : availableWeekStarts[0] || currentMonday,
   );
@@ -240,6 +243,10 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
   const [comment, setComment] = useState("");
   const [acting, setActing] = useState<ActingState>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [editingTimes, setEditingTimes] = useState<EditingTimes | null>(null);
+  const [entryBusy, setEntryBusy] = useState<string | null>(null);
+  const busy = Boolean(acting || actingDay || entryBusy);
 
   const selectedMonday = useMemo(
     () => parseLocalDate(selectedWeekStart),
@@ -316,21 +323,22 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
   async function reviewPersonDay(week: ApprovalWeek, date: string, action: "APPROVE" | "REJECT" | "REOPEN") {
     const reason = action === "APPROVE" ? "" : window.prompt(`Reason to ${action.toLowerCase()} ${employeeName(week)}'s day (${formatDate(date)})? If already exported, notify Accounts and replace the download.`);
-    if (reason === null) return;
-    if (action !== "APPROVE" && !reason?.trim()) { setError("A reason is required."); return; }
+    if (reason === null) return false;
+    if (action !== "APPROVE" && !reason?.trim()) { setError("A reason is required."); return false; }
     setActingDay(rowKey(week.id, date)); setError(null);
     try {
       const response = await fetch("/api/day/review", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ weekId: week.id, date, action, comment: reason }) });
       const data = await readJsonOrText(response);
       if (!response.ok) throw new Error(data.error || "Could not review day");
       setWeeks((current) => current.map((item) => item.id === week.id ? { ...item, status: data.week.status, dayApprovals: data.week.dayApprovals } : item));
-    } catch (error) { setError(error instanceof Error ? error.message : "Could not review day"); }
+      return true;
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not review day"); return false; }
     finally { setActingDay(null); }
   }
 
-  async function submitCutoff(week: ApprovalWeek, through: string) {
-    if (!window.confirm(`Submit ${employeeName(week)}'s days through ${formatDate(through)} for payroll review? Later days will stay open.`)) return;
-    setActing({ weekId: week.id, action: "SUBMIT_CUTOFF" }); setError(null);
+  async function submitCutoff(week: ApprovalWeek, through?: string) {
+    if (!window.confirm(through ? `Submit ${employeeName(week)}'s days through ${formatDate(through)} for payroll review? Later days will stay open.` : `Submit ${employeeName(week)}'s entire week for approval? All remaining days will be locked for review.`)) return;
+    setActing({ weekId: week.id, action: through ? "SUBMIT_CUTOFF" : "SUBMIT_WEEK" }); setError(null);
     try {
       const response = await fetch("/api/week/submit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ weekId: week.id, through }) });
       const data = await readJsonOrText(response);
@@ -338,6 +346,92 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
       setWeeks((current) => current.map((item) => item.id === week.id ? { ...item, status: data.week.status, dayApprovals: data.week.dayApprovals } : item));
     } catch (error) { setError(error instanceof Error ? error.message : "Could not submit payroll days"); }
     finally { setActing(null); }
+  }
+
+  async function refreshWeek(weekId: string) {
+    const response = await fetch(`/api/week/detail?weekId=${encodeURIComponent(weekId)}`, { cache: "no-store" });
+    const data = await readJsonOrText(response);
+    if (!response.ok) throw new Error(data.error || "Could not refresh the corrected week");
+    const refreshed = { ...data.week, user: data.user || data.week.user, computed: data.computed } as ApprovalWeek;
+    setWeeks((current) => current.map((week) => week.id === weekId ? refreshed : week));
+    return refreshed;
+  }
+
+  async function returnDayForApproval(weekId: string, date: string, hasDay = true) {
+    let submissionError: string | null = null;
+    if (hasDay) {
+      try {
+        const response = await fetch("/api/week/submit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ weekId, date }) });
+        const data = await readJsonOrText(response);
+        if (!response.ok) throw new Error(data.error || "Could not submit corrected day");
+      } catch (error) { submissionError = error instanceof Error ? error.message : "Could not submit corrected day"; }
+    }
+    await refreshWeek(weekId);
+    if (submissionError) throw new Error(`The change was saved, but resubmission failed: ${submissionError}. Use Submit day to retry.`);
+  }
+
+  async function prepareEntry(week: ApprovalWeek, entry: ApprovalEntry) {
+    const approval = week.dayApprovals.find((day) => dateKey(day.date) === dateKey(entry.date));
+    if (week.status === "APPROVED" || week.status === "SUBMITTED" || approval?.status === "APPROVED" || approval?.status === "PENDING") {
+      if (!await reviewPersonDay(week, dateKey(entry.date), "REOPEN")) return false;
+    }
+    setStatusFilter("ALL");
+    setError(null); setNotice(null);
+    return true;
+  }
+
+  async function beginTimeEdit(week: ApprovalWeek, entry: ApprovalEntry) {
+    if (busy) return;
+    if (editingTimes && editingTimes.entryId !== entry.id && !window.confirm("Discard the unsaved time changes?")) return;
+    if (!await prepareEntry(week, entry)) return;
+    setEditingTimes({ weekId: week.id, entryId: entry.id, startTime: entry.startTime, finishTime: entry.finishTime });
+    setExpandedRows((current) => new Set(current).add(rowKey(week.id, dateKey(entry.date))));
+  }
+
+  async function saveTimes(week: ApprovalWeek, entry: ApprovalEntry) {
+    if (!editingTimes || busy) return;
+    if (!/^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/.test(editingTimes.startTime) || !/^(?:[01]\d|2[0-3]):(?:00|15|30|45)$/.test(editingTimes.finishTime) || editingTimes.startTime === editingTimes.finishTime) {
+      setError("Choose different start and finish times in 15-minute steps."); return;
+    }
+    setEntryBusy(entry.id); setError(null); setNotice(null);
+    try {
+      const response = await fetch("/api/entry/update", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: entry.id, timesOnly: true, startTime: editingTimes.startTime, finishTime: editingTimes.finishTime }) });
+      const data = await readJsonOrText(response);
+      if (!response.ok) throw new Error(data.error || "Could not save times");
+      setEditingTimes(null);
+      await returnDayForApproval(week.id, dateKey(entry.date));
+      setNotice("Times saved and totals updated. Approve the corrected day again.");
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not save times"); }
+    finally { setEntryBusy(null); }
+  }
+
+  async function deleteApprovalEntry(week: ApprovalWeek, entry: ApprovalEntry) {
+    if (busy || !window.confirm(`Delete ${employeeName(week)}'s entry for ${getEntryLabel(entry)} on ${formatDate(entry.date)} (${entry.startTime}–${entry.finishTime})? Only this entry will be deleted.`)) return;
+    if (!await prepareEntry(week, entry)) return;
+    setEntryBusy(entry.id);
+    try {
+      const response = await fetch("/api/entry/delete", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: entry.id }) });
+      const data = await readJsonOrText(response);
+      if (!response.ok) throw new Error(data.error || "Could not delete entry");
+      if (editingTimes?.entryId === entry.id) setEditingTimes(null);
+      const hasDay = Boolean(data.computed?.days?.some((day: { date: string }) => day.date === dateKey(entry.date)));
+      await returnDayForApproval(week.id, dateKey(entry.date), hasDay);
+      setNotice(hasDay ? "Entry deleted and totals updated. Approve the corrected day again." : "Entry deleted and totals updated.");
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not delete entry"); }
+    finally { setEntryBusy(null); }
+  }
+
+  async function editEntryDetails(week: ApprovalWeek, entry: ApprovalEntry) {
+    if (busy || (editingTimes && !window.confirm("Discard the unsaved time changes and open the full entry editor?")) || !await prepareEntry(week, entry)) return;
+    const returnTo = `/admin/approvals?weekStart=${selectedWeekStart}`;
+    window.location.assign(`/timesheet/entry/${encodeURIComponent(entry.id)}?admin=1&returnTo=${encodeURIComponent(returnTo)}`);
+  }
+
+  async function submitCorrectedDay(week: ApprovalWeek, date: string) {
+    setEntryBusy(`${week.id}:${date}`); setError(null);
+    try { await returnDayForApproval(week.id, date); setNotice("Day submitted. It can now be approved."); }
+    catch (error) { setError(error instanceof Error ? error.message : "Could not submit day"); }
+    finally { setEntryBusy(null); }
   }
 
   async function reviewWeek(
@@ -468,6 +562,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
           <p className="mt-1 text-sm text-slate-600">
             Day approvals are saved and immediately available to Accounts. Payroll runs
             from the 16th to the 15th. Approve the full week once the remaining days are submitted.
+            Use Edit / delete to correct an entry and refresh its totals here.
           </p>
         </div>
 
@@ -487,6 +582,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
           {error}
         </div>
       ) : null}
+      {notice ? <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div> : null}
 
       <section className="grid gap-4 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200 lg:grid-cols-[1fr_1fr_1fr_1.2fr]">
         <div>
@@ -496,6 +592,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
           <div className="mt-1 flex gap-2">
             <button
               type="button"
+              disabled={busy || Boolean(editingTimes)}
               onClick={() =>
                 setSelectedWeekStart((current) => addWeeks(current, -1))
               }
@@ -506,6 +603,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
             <input
               type="date"
+              disabled={busy || Boolean(editingTimes)}
               value={selectedWeekStart}
               onChange={(event) =>
                 setSelectedWeekStart(
@@ -519,6 +617,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
 
             <button
               type="button"
+              disabled={busy || Boolean(editingTimes)}
               onClick={() =>
                 setSelectedWeekStart((current) => addWeeks(current, 1))
               }
@@ -535,6 +634,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
           </span>
           <select
             value={statusFilter}
+            disabled={busy || Boolean(editingTimes)}
             onChange={(event) => setStatusFilter(event.target.value)}
             className="mt-1 w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none focus:ring-2 focus:ring-cyan-300"
           >
@@ -685,14 +785,14 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                               <td className="px-4 py-4">
                                 {reviewed ? (
                                   <div className="space-y-2"><span className="font-semibold text-emerald-700">Approved ✓</span>
-                                    <button type="button" disabled={Boolean(actingDay) || Boolean(acting)} onClick={() => reviewPersonDay(week, day.iso, "REOPEN")} className="block text-xs text-amber-800 underline">Reopen day</button>
+                                    <button type="button" disabled={busy || Boolean(editingTimes)} onClick={() => reviewPersonDay(week, day.iso, "REOPEN")} className="block text-xs text-amber-800 underline">Reopen day</button>
                                   </div>
                                 ) : canApproveDay ? (
                                   <div className="space-y-2">
                                   <button
                                     type="button"
                                     onClick={() => reviewPersonDay(week, day.iso, "APPROVE")}
-                                    disabled={Boolean(actingDay) || Boolean(acting)}
+                                    disabled={busy || Boolean(editingTimes)}
                                     className={`min-w-[112px] rounded-lg px-3 py-2 text-xs font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-100 ${
                                       reviewed
                                         ? "bg-emerald-700"
@@ -701,11 +801,12 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                   >
                                     {actingDay === key ? "Saving…" : "Approve Day"}
                                   </button>
-                                  <button type="button" disabled={Boolean(actingDay) || Boolean(acting)} onClick={() => reviewPersonDay(week, day.iso, "REJECT")} className="block text-xs text-red-700 underline">Reject day</button>
+                                  <button type="button" disabled={busy || Boolean(editingTimes)} onClick={() => reviewPersonDay(week, day.iso, "REJECT")} className="block text-xs text-red-700 underline">Reject day</button>
                                   </div>
                                 ) : (
                                   <span className="text-xs text-slate-500">{dayApproval?.status === "REJECTED" ? "Returned for correction" : "Not submitted"}</span>
                                 )}
+                                {dayApproval?.status === "REJECTED" && computedDay ? <button type="button" disabled={busy || Boolean(editingTimes)} onClick={() => submitCorrectedDay(week, day.iso)} className="mt-2 block text-xs font-semibold text-blue-700 underline">Submit day</button> : null}
                               </td>
 
                               <td className="px-4 py-4">
@@ -766,10 +867,11 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                   {entries.length > 0 ? (
                                     <button
                                       type="button"
+                                      disabled={busy || Boolean(editingTimes)}
                                       onClick={() => toggleExpandedRow(key)}
                                       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50"
                                     >
-                                      {expanded ? "Hide" : "Details"}
+                                      {expanded ? "Hide entries" : "Edit / delete"}
                                     </button>
                                   ) : null}
                                 </div>
@@ -828,18 +930,26 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                                 </div>
                                               ) : null}
 
-                                              {!reviewed && dayApproval?.status !== "PENDING" ? <Link
-                                                href={`/timesheet/entry/${encodeURIComponent(
-                                                  entry.id,
-                                                )}?admin=1&adminWeekId=${encodeURIComponent(
-                                                  week.id,
-                                                )}`}
-                                                className="mt-3 inline-flex rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500"
-                                              >
-                                                Edit
-                                              </Link> : null}
+                                              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                                                {entry.type === "WORK" || entry.type === "TRAINING" ? <button type="button" disabled={busy || editingTimes?.entryId === entry.id} onClick={() => beginTimeEdit(week, entry)} className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Edit times</button> : null}
+                                                <button type="button" disabled={busy} onClick={() => editEntryDetails(week, entry)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold disabled:opacity-50">Edit entry</button>
+                                                <button type="button" disabled={busy || Boolean(editingTimes)} onClick={() => deleteApprovalEntry(week, entry)} className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 disabled:opacity-50">{entryBusy === entry.id ? "Saving…" : "Delete"}</button>
+                                              </div>
                                             </div>
                                           </div>
+                                          {editingTimes?.entryId === entry.id ? (
+                                            <form onSubmit={(event) => { event.preventDefault(); void saveTimes(week, entry); }} className="mt-4 space-y-3 rounded-xl bg-slate-50 p-3">
+                                              <div className="grid grid-cols-2 gap-3">
+                                                <label className="text-xs font-semibold">Start time<input type="time" step={900} required value={editingTimes.startTime} onChange={(event) => setEditingTimes((current) => current ? { ...current, startTime: event.target.value } : null)} disabled={busy} className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2 text-base" /></label>
+                                                <label className="text-xs font-semibold">Finish time<input type="time" step={900} required value={editingTimes.finishTime} onChange={(event) => setEditingTimes((current) => current ? { ...current, finishTime: event.target.value } : null)} disabled={busy} className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2 text-base" /></label>
+                                              </div>
+                                              <p className="text-xs text-slate-600">Use 15-minute steps. A finish time earlier than the start is treated as the following day.</p>
+                                              <div className="flex flex-wrap gap-2">
+                                                <button type="submit" disabled={busy} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{entryBusy === entry.id ? "Saving…" : "Save and return for approval"}</button>
+                                                <button type="button" disabled={busy} onClick={() => { setEditingTimes(null); setNotice("No time changes saved. A reopened day stays open until submitted and approved again."); }} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold">Cancel</button>
+                                              </div>
+                                            </form>
+                                          ) : null}
                                         </div>
                                       );
                                     })}
@@ -935,7 +1045,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                               <button
                                 type="button"
                                 onClick={() => rejectWeek(week)}
-                                disabled={Boolean(acting)}
+                                disabled={busy || Boolean(editingTimes)}
                                 className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
                               >
                                 {acting?.weekId === week.id &&
@@ -947,7 +1057,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 type="button"
                                 onClick={() => approveWeek(week)}
                                 disabled={
-                                  !allWeekDaysApproved || Boolean(acting) || Boolean(actingDay)
+                                  !allWeekDaysApproved || busy || Boolean(editingTimes)
                                 }
                                 className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
                               >
@@ -961,7 +1071,7 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                             <button
                               type="button"
                               onClick={() => reopenWeek(week)}
-                              disabled={Boolean(acting)}
+                              disabled={busy || Boolean(editingTimes)}
                               className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                             >
                               {acting?.weekId === week.id &&
@@ -970,7 +1080,10 @@ export default function AdminApprovalsPageClient({ initialWeeks }: Props) {
                                 : "Reopen Week"}
                             </button>
                           ) : (
-                            cutoff && canSubmitCutoff ? <button type="button" onClick={() => submitCutoff(week, cutoff)} disabled={Boolean(acting) || Boolean(actingDay)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit up to 15th</button> : <span className="text-slate-400">—</span>
+                            <>
+                              {cutoff && canSubmitCutoff ? <button type="button" onClick={() => submitCutoff(week, cutoff)} disabled={busy || Boolean(editingTimes)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit up to 15th</button> : null}
+                              {week.computed.days.length ? <button type="button" onClick={() => submitCutoff(week)} disabled={busy || Boolean(editingTimes)} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800 disabled:opacity-50">Submit week</button> : null}
+                            </>
                           )}
                         </div>
                       </td>

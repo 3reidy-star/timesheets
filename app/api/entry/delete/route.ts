@@ -86,9 +86,13 @@ export async function POST(request: Request) {
     const weekId = entry.week.id;
 
     // Delete the entry only
-    await withEditableDays([{ weekId, date: entry.date }], isAdmin, (tx) => tx.timesheetEntry.delete({
-      where: { id },
-    }), entry);
+    await withEditableDays([{ weekId, date: entry.date }], isAdmin, async (tx) => {
+      await tx.timesheetEntry.delete({ where: { id } });
+      if (isAdmin) await tx.weekAudit.create({ data: {
+        weekId, action: "EDITED", performedById: currentUser.id,
+        comment: `Entry deleted by administrator: ${entry.date.toISOString().slice(0, 10)}; ${entry.job}; ${entry.startTime}–${entry.finishTime}; entry ${id}.`,
+      } });
+    }, entry);
 
     const updatedWeek = await prisma.timesheetWeek.findUnique({
       where: { id: weekId },
@@ -110,7 +114,7 @@ export async function POST(request: Request) {
     });
 
     const computed = updatedWeek
-      ? calcWeekTotals(updatedWeek.entries)
+      ? calcWeekTotals(updatedWeek.entries, updatedWeek.weekStart)
       : null;
 
     return NextResponse.json({

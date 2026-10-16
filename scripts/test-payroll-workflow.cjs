@@ -133,6 +133,7 @@ async function summary(from,to) {
   const component = load('app/admin/approvals/AdminApprovalsPageClient.tsx').default;
   const html = require('react-dom/server').renderToStaticMarkup(require('react').createElement(component,{initialWeeks:[JSON.parse(JSON.stringify({...enriched(),computed}))]}));
   assert.ok(html.includes('Approve Day')); assert.ok(html.includes('Not submitted'));
+  assert.ok(html.includes('Edit / delete'),'Entry correction controls are reachable on the approval rows');
   await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'APPROVE'},403);
   admin();
   await expectStatus(reviewDay,{weekId:'w',date:'2026-10-16',action:'APPROVE'},409);
@@ -175,6 +176,62 @@ async function summary(from,to) {
   await expectStatus(submit,{weekId:'w'},200);
   await expectStatus(reviewDay,{weekId:'w',date:'2026-08-31',action:'APPROVE'},200);
   assert.equal(payroll.isPayrollDayApproved(enriched(),date('2026-08-31')),true,'Bank holiday without entry can be approved');
+
+  // Approval-screen correction workflow, independent of the cutoff fixture.
+  week = { id:'w', userId:'u', weekStart:date('2026-10-12'), status:'SUBMITTED',
+    entries:[{...entry(15),description:'Keep these notes',agreedRate:125,overnight:true,leftEarlyByChoice:false,jobAndKnock:false},entry(16)], dayApprovals:[],audits:[],user:owner };
+  const updateEntry = load('app/api/entry/update/route.ts').POST;
+  const deleteEntry = load('app/api/entry/delete/route.ts').POST;
+  admin();
+  await expectStatus(updateEntry,{id:'e15',timesOnly:true,startTime:'08:30',finishTime:'18:00'},409);
+  // Legacy submitted weeks may have no saved day records yet.
+  await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'REOPEN',comment:'Correcting times during approval'},200);
+  assert.equal(week.status,'DRAFT');
+  assert.equal(week.dayApprovals.find(day=>day.date.getUTCDate()===16).status,'PENDING','Other submitted days stay submitted');
+  const beforeCorrection = structuredClone(week.entries[0]);
+  await expectStatus(updateEntry,{id:'e15',timesOnly:true,startTime:'08:37',finishTime:'18:00'},400);
+  await expectStatus(updateEntry,{id:'e15',timesOnly:true,startTime:'08:30',finishTime:'08:30'},400);
+  actor=owner;
+  await expectStatus(updateEntry,{id:'e15',timesOnly:true,startTime:'08:30',finishTime:'18:00'},403);
+  admin();
+  await expectStatus(updateEntry,{id:'e15',timesOnly:true,startTime:'08:30',finishTime:'18:00',job:'Do not overwrite',date:'2027-01-01',overnight:false,agreedRate:0,leftEarlyByChoice:true,jobAndKnock:true},200);
+  const corrected = week.entries.find(entry=>entry.id==='e15');
+  for(const key of ['job','description','agreedRate','overnight','leftEarlyByChoice','jobAndKnock','userId','weekId','type']) assert.equal(corrected[key],beforeCorrection[key],`${key} is preserved`);
+  assert.equal(corrected.date.getTime(),beforeCorrection.date.getTime());
+  assert.equal(corrected.hours,9); assert.equal(corrected.otMonFriHours,1);
+  assert.ok(week.audits.some(audit=>audit.comment.includes('19:00')&&audit.comment.includes('18:00')),'Old and new times are audited');
+  await expectStatus(submit,{weekId:'w',date:'2026-10-15',through:'2026-10-15'},400);
+  await expectStatus(submit,{weekId:'w',date:'2026-10-22'},409);
+  await expectStatus(submit,{weekId:'w',date:'2026-10-15'},200);
+  assert.equal(week.status,'DRAFT','Resubmitting one corrected day leaves the week open');
+  assert.equal(week.dayApprovals.find(day=>day.date.getUTCDate()===15).status,'PENDING');
+  assert.equal(payroll.isPayrollDayApproved(enriched(),date('2026-10-15')),false,'Corrected times do not enter payroll until reapproved');
+  await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'APPROVE'},200);
+  assert.equal(payroll.isPayrollDayApproved(enriched(),date('2026-10-15')),true);
+  // Deleting one of multiple jobs must preserve the other job and employee.
+  week.entries.push({...entry(15),id:'duplicate-job',job:'Second job to delete'});
+  await expectStatus(deleteEntry,{id:'duplicate-job'},409);
+  await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'REOPEN',comment:'Remove duplicate job'},200);
+  const remainingIds = week.entries.filter(entry=>entry.id!=='duplicate-job').map(entry=>entry.id);
+  const deletion = await expectStatus(deleteEntry,{id:'duplicate-job'},200);
+  assert.deepEqual(week.entries.map(entry=>entry.id),remainingIds);
+  assert.ok(deletion.computed.days.some(day=>day.date==='2026-10-15'));
+  assert.ok(week.audits.some(audit=>audit.comment.includes('Entry deleted')&&audit.comment.includes('duplicate-job')));
+  await expectStatus(submit,{weekId:'w',date:'2026-10-15'},200);
+  await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'APPROVE'},200);
+  assert.equal(week.dayApprovals.find(day=>day.date.getUTCDate()===16).status,'PENDING');
+  // Full-detail editor is still used for fixed-pay non-working entry types.
+  week.entries.push({...entry(17),id:'holiday',type:'HOLIDAY_FULL'});
+  await expectStatus(updateEntry,{id:'holiday',timesOnly:true,startTime:'08:30',finishTime:'18:00'},400);
+  // Special payroll flags survive clock-only corrections and retain their pay rules.
+  week.entries.push({...entry(17),id:'knock',jobAndKnock:true,leftEarlyByChoice:false,agreedRate:99});
+  await expectStatus(updateEntry,{id:'knock',timesOnly:true,startTime:'08:30',finishTime:'12:30'},200);
+  assert.equal(week.entries.find(entry=>entry.id==='knock').jobAndKnock,true);
+  assert.equal(week.entries.find(entry=>entry.id==='knock').agreedRate,99);
+  assert.equal(week.entries.find(entry=>entry.id==='knock').otMonFriHours,0);
+  week.entries.push({...entry(17),id:'training',type:'TRAINING',jobAndKnock:false,leftEarlyByChoice:false});
+  await expectStatus(updateEntry,{id:'training',timesOnly:true,startTime:'08:30',finishTime:'12:30'},200);
+  assert.equal(week.entries.find(entry=>entry.id==='training').type,'TRAINING');
   console.error=originalConsoleError;
   console.log('Payroll checks passed: approval redirect, cutoff, persistence, locks, exports, corrections, historical approvals and bank holidays.');
 })().catch(error => { originalConsoleError(error); process.exitCode=1; });
