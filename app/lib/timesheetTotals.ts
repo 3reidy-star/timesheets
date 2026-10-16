@@ -118,42 +118,15 @@ function computeEntryWeekdayOT(entry: TimesheetEntryForTotals) {
   return round2(otMin / 60);
 }
 
-function normaliseWeekStart(value?: Date | string | null) {
-  if (!value) return null;
-  const date = typeof value === "string" ? new Date(value) : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const dow = date.getUTCDay();
-  const diff = dow === 0 ? -6 : 1 - dow;
-  date.setUTCDate(date.getUTCDate() + diff);
-  date.setUTCHours(0, 0, 0, 0);
-  return date;
-}
-
 export function calcWeekTotals(
   entries: TimesheetEntryForTotals[],
-  weekStartInput?: Date | string | null,
+  _weekStartInput?: Date | string | null,
 ) {
   const byDay = new Map<string, TimesheetEntryForTotals[]>();
 
   for (const entry of entries) {
     const key = dayKeyUTC(entry.date);
     byDay.set(key, [...(byDay.get(key) ?? []), entry]);
-  }
-
-  const inferredWeekStart = entries.length > 0 ? normaliseWeekStart(entries[0].date) : null;
-  const weekStart = normaliseWeekStart(weekStartInput) ?? inferredWeekStart;
-
-  // Seed bank-holiday dates even when the employee has no entry. This means
-  // a normal non-working bank holiday is still included in payroll totals.
-  if (weekStart) {
-    for (let offset = 0; offset < 7; offset += 1) {
-      const date = new Date(weekStart);
-      date.setUTCDate(date.getUTCDate() + offset);
-      if (getEnglandBankHoliday(date)) {
-        const key = dayKeyUTC(date);
-        if (!byDay.has(key)) byDay.set(key, []);
-      }
-    }
   }
 
   const days = [...byDay.entries()]
@@ -198,11 +171,9 @@ export function calcWeekTotals(
       let otSunBhHours = 0;
 
       if (bankHoliday) {
-        // Pastorfrigor does not normally work England & Wales bank holidays.
-        // The employee receives the normal core pay for that weekday without
-        // needing to enter a holiday line. Any exceptional work is Sun/BH OT.
-        const bankHolidayCoreHours = corePaidHoursForDate(date);
-        regularHours = Math.max(bankHolidayCoreHours, paidNonWorkingHours);
+        // Holiday pay requires an explicit paid non-working entry. A calendar
+        // bank holiday alone does not establish an employee's entitlement.
+        regularHours = paidNonWorkingHours;
         corePaidHours = regularHours;
         otSunBhHours = workedHours;
         breakHours = workingEntries.length > 0 ? BREAK_HOURS : 0;
@@ -333,7 +304,7 @@ export function calcWeekTotals(
   );
 
   const hasAnyLeftEarlyByChoice = days.some((day) => day.leftEarlyByChoice);
-  const businessTopUpHours = hasAnyLeftEarlyByChoice ? 0 : BUSINESS_TOP_UP_HOURS;
+  const businessTopUpHours = hasAnyLeftEarlyByChoice || days.length === 0 ? 0 : BUSINESS_TOP_UP_HOURS;
 
   return {
     days,
@@ -362,7 +333,7 @@ export function calcWeekTotals(
       unpaidBreakHours: BREAK_HOURS,
       workingTypes: ["WORK", "TRAINING"],
       paidNonWorkingTypes: ["HOLIDAY_FULL", "HOLIDAY_HALF", "SICK"],
-      bankHolidays: "England & Wales bank holidays are paid automatically; work performed is Sun/BH overtime.",
+      bankHolidays: "Bank-holiday pay requires an entered holiday line; work performed is Sun/BH overtime.",
     },
   };
 }

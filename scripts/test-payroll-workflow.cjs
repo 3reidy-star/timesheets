@@ -134,6 +134,10 @@ async function summary(from,to) {
   const html = require('react-dom/server').renderToStaticMarkup(require('react').createElement(component,{initialWeeks:[JSON.parse(JSON.stringify({...enriched(),computed}))]}));
   assert.ok(html.includes('Approve Day')); assert.ok(html.includes('Not submitted'));
   assert.ok(html.includes('Edit / delete'),'Entry correction controls are reachable on the approval rows');
+  assert.ok(html.includes('Submit employee weeks'),'Employee submission controls are above daily approvals');
+  assert.ok(html.indexOf('Submit employee weeks') < html.indexOf('Approve Day'));
+  assert.ok(html.includes('Submit week'));
+  assert.match(html, /Site 15[\s\S]*?SUBMITTED/, 'Pending day displays submitted even while its week is draft');
   await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'APPROVE'},403);
   admin();
   await expectStatus(reviewDay,{weekId:'w',date:'2026-10-16',action:'APPROVE'},409);
@@ -174,8 +178,27 @@ async function summary(from,to) {
   week.weekStart=date('2026-08-31'); week.dayApprovals=[];
   week.entries=[1,2,3,4].map(day => ({...entry(12),id:`bh${day}`,date:date(`2026-09-0${day}`)}));
   await expectStatus(submit,{weekId:'w'},200);
+  const calcTotals = load('app/lib/timesheetTotals.ts').calcWeekTotals;
+  assert.ok(!calcTotals(week.entries,week.weekStart).days.some(day=>day.date==='2026-08-31'),'No automatic hours on a non-working bank holiday');
+  assert.equal(calcTotals([],week.weekStart).totals.paidHours,0,'An empty bank-holiday week has no pay');
+  assert.ok(!week.dayApprovals.some(day=>day.date.getTime()===date('2026-08-31').getTime()),'Submitting the week does not submit a phantom bank-holiday day');
+  await expectStatus(reviewDay,{weekId:'w',date:'2026-08-31',action:'APPROVE'},409);
+  await expectStatus(reviewWeek,{weekId:'w',action:'REJECT',comment:'Add manual bank holiday'},200);
+  week.entries.push({...entry(12),id:'bh-holiday',date:date('2026-08-31'),type:'HOLIDAY_HALF',hours:4,regularHours:4});
+  let bankDay = calcTotals(week.entries,week.weekStart).days.find(day=>day.date==='2026-08-31');
+  assert.equal(bankDay.regularHours,4,'Manual half-day is not inflated to a full day');
+  week.entries.push({...entry(12),id:'bh-work',date:date('2026-08-31'),hours:6});
+  bankDay = calcTotals(week.entries,week.weekStart).days.find(day=>day.date==='2026-08-31');
+  assert.equal(bankDay.regularHours,4); assert.equal(bankDay.otSunBhHours,6); assert.equal(bankDay.paidHours,10);
+  const workOnly = calcTotals([week.entries.find(entry=>entry.id==='bh-work')],week.weekStart).days[0];
+  assert.equal(workOnly.regularHours,0,'Working a bank holiday does not invent holiday entitlement');
+  assert.equal(workOnly.otSunBhHours,6,'Bank-holiday work retains its overtime category');
+  await expectStatus(submit,{weekId:'w'},200);
   await expectStatus(reviewDay,{weekId:'w',date:'2026-08-31',action:'APPROVE'},200);
-  assert.equal(payroll.isPayrollDayApproved(enriched(),date('2026-08-31')),true,'Bank holiday without entry can be approved');
+  assert.equal(payroll.isPayrollDayApproved(enriched(),date('2026-08-31')),true,'An explicitly entered bank-holiday day can be approved');
+  assert.equal((await summary('2026-08-16','2026-09-15')).getCell(11).value,0.5,'Payroll records the manually entered half holiday');
+  assert.equal((await summary('2026-08-16','2026-09-15')).getCell(9).value,6,'Payroll keeps bank-holiday work as overtime');
+
 
   // Approval-screen correction workflow, independent of the cutoff fixture.
   week = { id:'w', userId:'u', weekStart:date('2026-10-12'), status:'SUBMITTED',

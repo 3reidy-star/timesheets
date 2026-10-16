@@ -344,6 +344,7 @@ export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStar
       const data = await readJsonOrText(response);
       if (!response.ok) throw new Error(data.error || "Could not submit payroll days");
       setWeeks((current) => current.map((item) => item.id === week.id ? { ...item, status: data.week.status, dayApprovals: data.week.dayApprovals } : item));
+      setNotice(through ? "Days submitted through the 15th. They can now be approved." : `${employeeName(week)}'s week submitted. You can now approve their days.`);
     } catch (error) { setError(error instanceof Error ? error.message : "Could not submit payroll days"); }
     finally { setActing(null); }
   }
@@ -669,6 +670,26 @@ export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStar
         </div>
       </section>
 
+      {visibleWeeks.some((week) => week.status === "DRAFT" || week.status === "REJECTED") ? (
+        <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+          <h2 className="text-lg font-semibold text-slate-900">Submit employee weeks</h2>
+          <p className="mt-1 text-sm text-slate-600">Submit a week on behalf of an employee, then approve their days below. Bank-holiday pay requires an entered holiday line.</p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {visibleWeeks.filter((week) => week.status === "DRAFT" || week.status === "REJECTED").map((week) => (
+              <div key={week.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3">
+                <div>
+                  <div className="font-semibold text-slate-900">{employeeName(week)}</div>
+                  <div className="text-xs text-slate-500">{week.entries.length ? `${week.entries.length} entries · ${fmt2(week.computed.totals.paidHours)} paid hours` : "Add entries before submitting"}</div>
+                </div>
+                <button type="button" onClick={() => submitCutoff(week)} disabled={busy || Boolean(editingTimes) || !week.entries.length} className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40">
+                  {acting?.weekId === week.id && acting.action === "SUBMIT_WEEK" ? "Submitting…" : "Submit week"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {visibleWeeks.length === 0 ? (
         <section className="rounded-3xl bg-white p-8 text-center text-sm text-slate-600 shadow-sm ring-1 ring-slate-200">
           No timesheets were found for the selected week and status.
@@ -859,7 +880,7 @@ export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStar
                               </td>
 
                               <td className="px-4 py-4">
-                                <StatusBadge status={week.status} />
+                                <StatusBadge status={reviewed && computedDay ? "APPROVED" : !computedDay ? "NO ENTRY" : dayApproval?.status === "REJECTED" ? "REJECTED" : canApproveDay ? "SUBMITTED" : "DRAFT"} />
                               </td>
 
                               <td className="px-4 py-4">
