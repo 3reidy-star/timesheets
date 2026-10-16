@@ -94,6 +94,39 @@ async function summary(from,to) {
 }
 (async () => {
   assert.throws(() => load('app/approvals/page.tsx').default(),/REDIRECT:\/admin\/approvals/,'Old crashing route must use current screen');
+  const startWeek = load('app/api/admin/timesheets/start/route.ts').POST;
+  await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-12'},403);
+  actor=null; await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-12'},401);
+  admin();
+  await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-13'},400);
+  await expectStatus(startWeek,{userId:'u',weekStart:'2026-02-30'},400);
+  await expectStatus(startWeek,{weekStart:'2026-10-12'},400);
+  const originalLookup = prisma.user.findUnique;
+  const originalUpsert = prisma.timesheetWeek.upsert;
+  let startedWeek = null, starts = 0;
+  prisma.timesheetWeek.upsert = async args => {
+    assert.deepEqual(args.update,{},'Existing week must not be reset');
+    assert.equal(args.where.userId_weekStart.userId,'u');
+    if (!startedWeek) {
+      assert.equal(args.create.audits.create.performedById,'admin');
+      assert.equal(args.create.audits.create.action,'CREATED');
+      starts++;
+      startedWeek={id:'started',weekStart:args.create.weekStart,status:args.create.status};
+    }
+    return startedWeek;
+  };
+  const started = await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-12'},200);
+  assert.equal(started.week.status,'DRAFT'); assert.equal(started.employee.id,'u');
+  assert.equal((await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-12'},200)).week.id,started.week.id);
+  assert.equal(starts,1,'Repeated requests create one week and one creation audit');
+  startedWeek.status='APPROVED';
+  await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-12'},409);
+  assert.equal(startedWeek.status,'APPROVED','Starting a week preserves approvals');
+  prisma.user.findUnique = async args => args.where.email ? actor : {...owner,active:false};
+  await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-12'},404);
+  actor={...actor,active:false};
+  await expectStatus(startWeek,{userId:'u',weekStart:'2026-10-12'},403);
+  prisma.user.findUnique=originalLookup; prisma.timesheetWeek.upsert=originalUpsert; admin();
   // Reproduce the actual P2021 from an authenticated server-page request.
   tableExists = false;
   const rowsBeforeRepair = JSON.stringify(week.entries);
@@ -134,6 +167,8 @@ async function summary(from,to) {
   const html = require('react-dom/server').renderToStaticMarkup(require('react').createElement(component,{initialWeeks:[JSON.parse(JSON.stringify({...enriched(),computed}))]}));
   assert.ok(html.includes('Approve Day')); assert.ok(html.includes('Not submitted'));
   assert.ok(html.includes('Edit / delete'),'Entry correction controls are reachable on the approval rows');
+  assert.ok(html.includes('Start employee week'),'Managers can start an employee week from Approvals');
+  assert.ok(html.includes('Add entry'),'Empty weeks have a path to entry creation');
   assert.ok(html.includes('Submit employee weeks'),'Employee submission controls are above daily approvals');
   assert.ok(html.indexOf('Submit employee weeks') < html.indexOf('Approve Day'));
   assert.ok(html.includes('Submit week'));

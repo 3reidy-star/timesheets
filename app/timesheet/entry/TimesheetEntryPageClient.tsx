@@ -337,6 +337,8 @@ export default function TimesheetEntryPageClient() {
 
   const weekStart = sp.get("weekStart") || "";
   const adminWeekId = sp.get("adminWeekId") || "";
+  const requestedReturn = sp.get("returnTo") || "";
+  const approvalsReturn = adminWeekId && /^\/admin\/approvals\?weekStart=\d{4}-\d{2}-\d{2}$/.test(requestedReturn) ? requestedReturn : "";
   const employeeName = sp.get("employeeName") || "the employee";
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -536,7 +538,7 @@ export default function TimesheetEntryPageClient() {
 
       router.push(
         adminWeekId
-          ? `/admin/timesheets?weekId=${encodeURIComponent(adminWeekId)}`
+          ? approvalsReturn || `/admin/timesheets?weekId=${encodeURIComponent(adminWeekId)}`
           : `/timesheet?weekStart=${encodeURIComponent(nextWeekStart)}`,
       );
       router.refresh();
@@ -548,7 +550,7 @@ export default function TimesheetEntryPageClient() {
   }
 
   const backHref = adminWeekId
-    ? `/admin/timesheets?weekId=${encodeURIComponent(adminWeekId)}`
+    ? approvalsReturn || `/admin/timesheets?weekId=${encodeURIComponent(adminWeekId)}`
     : weekStart
       ? `/timesheet?weekStart=${encodeURIComponent(weekStart)}`
       : "/timesheet";

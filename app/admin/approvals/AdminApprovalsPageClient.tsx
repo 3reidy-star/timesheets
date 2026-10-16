@@ -61,6 +61,7 @@ export type ApprovalWeek = {
 
 type Props = {
   initialWeeks: ApprovalWeek[];
+  employees?: { id: string; name: string | null; email: string | null }[];
   initialWeekStart?: string;
 };
 
@@ -217,7 +218,7 @@ async function readJsonOrText(response: Response) {
   return { error: (await response.text()).slice(0, 1200) };
 }
 
-export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStart }: Props) {
+export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStart, employees = [] }: Props) {
   const currentMonday = formatInputDate(startOfWeekMonday(new Date()));
 
   const availableWeekStarts = useMemo(
@@ -246,7 +247,31 @@ export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStar
   const [notice, setNotice] = useState<string | null>(null);
   const [editingTimes, setEditingTimes] = useState<EditingTimes | null>(null);
   const [entryBusy, setEntryBusy] = useState<string | null>(null);
-  const busy = Boolean(acting || actingDay || entryBusy);
+  const [startingWeek, setStartingWeek] = useState(false);
+  const [startEmployeeId, setStartEmployeeId] = useState("");
+  const busy = Boolean(acting || actingDay || entryBusy || startingWeek);
+
+  function addEntryUrl(weekId: string, name: string) {
+    const params = new URLSearchParams({ weekStart: selectedWeekStart, adminWeekId: weekId, employeeName: name, returnTo: `/admin/approvals?weekStart=${selectedWeekStart}` });
+    return `/timesheet/entry?${params}`;
+  }
+
+  async function startEmployeeWeek() {
+    if (busy || !startEmployeeId) return;
+    setStartingWeek(true); setError(null);
+    try {
+      const response = await fetch("/api/admin/timesheets/start", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: startEmployeeId, weekStart: selectedWeekStart }),
+      });
+      const data = await readJsonOrText(response);
+      if (!response.ok) throw new Error(data.error || "Could not start employee week");
+      window.location.assign(addEntryUrl(data.week.id, data.employee.name || data.employee.email || "Employee"));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not start employee week");
+      setStartingWeek(false);
+    }
+  }
 
   const selectedMonday = useMemo(
     () => parseLocalDate(selectedWeekStart),
@@ -670,6 +695,20 @@ export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStar
         </div>
       </section>
 
+      <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+        <h2 className="text-lg font-semibold text-slate-900">Start employee week</h2>
+        <p className="mt-1 text-sm text-slate-600">Create a week commencing {formatDate(selectedWeekStart)} for an employee, then add their entries.</p>
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="min-w-60 flex-1 text-sm font-semibold text-slate-700">Employee
+            <select value={startEmployeeId} onChange={(event) => setStartEmployeeId(event.target.value)} disabled={busy || Boolean(editingTimes)} className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <option value="">Select employee</option>
+              {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name || employee.email || "Employee"}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={startEmployeeWeek} disabled={busy || Boolean(editingTimes) || !startEmployeeId} className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:opacity-40">{startingWeek ? "Starting…" : "Start employee week"}</button>
+        </div>
+      </section>
+
       {visibleWeeks.some((week) => week.status === "DRAFT" || week.status === "REJECTED") ? (
         <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
           <h2 className="text-lg font-semibold text-slate-900">Submit employee weeks</h2>
@@ -681,6 +720,7 @@ export default function AdminApprovalsPageClient({ initialWeeks, initialWeekStar
                   <div className="font-semibold text-slate-900">{employeeName(week)}</div>
                   <div className="text-xs text-slate-500">{week.entries.length ? `${week.entries.length} entries · ${fmt2(week.computed.totals.paidHours)} paid hours` : "Add entries before submitting"}</div>
                 </div>
+                {week.status === "DRAFT" ? <Link href={addEntryUrl(week.id, employeeName(week))} className={`shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold ${busy || editingTimes ? "pointer-events-none opacity-40" : "hover:bg-slate-50"}`} aria-disabled={busy || Boolean(editingTimes)}>Add entry</Link> : null}
                 <button type="button" onClick={() => submitCutoff(week)} disabled={busy || Boolean(editingTimes) || !week.entries.length} className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-40">
                   {acting?.weekId === week.id && acting.action === "SUBMIT_WEEK" ? "Submitting…" : "Submit week"}
                 </button>

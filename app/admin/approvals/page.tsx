@@ -163,6 +163,10 @@ export default async function AdminApprovalsPage({ searchParams }: {
       };
     });
 
+  const employees = await prisma.user.findMany({
+    where: { active: true }, orderBy: { name: "asc" },
+    select: { id: true, name: true, email: true },
+  });
   const params = searchParams ? await searchParams : {};
-  return <AdminApprovalsPageClient initialWeeks={formattedWeeks} initialWeekStart={params.weekStart} />;
+  return <AdminApprovalsPageClient initialWeeks={formattedWeeks} employees={employees} initialWeekStart={params.weekStart} />;
 }
