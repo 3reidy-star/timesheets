@@ -81,7 +81,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const computed = calcWeekTotals(existing.entries as any, existing.weekStart);
+    const computed = calcWeekTotals(existing.entries as any, existing.weekStart, user);
 
     return NextResponse.json({
       week: existing,

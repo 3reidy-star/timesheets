@@ -60,7 +60,7 @@ export async function GET(req: Request) {
       const employeeWeeks = weeksByUser.get(user.id) || []; const employeeName = user.name?.trim() || user.email || ""; const metadata = PAYROLL_METADATA[normaliseName(employeeName)] || {}; const { firstName, surname } = splitName(employeeName);
       let regularHours = 0, weekdayOvertime = 0, saturdayOvertime = 0, sundayOvertime = 0, overnightStays = 0, holidayDays = 0;
       for (const week of employeeWeeks) {
-        const computed = calcWeekTotals(week.entries, week.weekStart);
+        const computed = calcWeekTotals(week.entries, week.weekStart, user);
         for (const day of computed.days) {
           const dayDate = startOfDay(day.date); if (dayDate < fromDate || dayDate > toDate) continue;
           if (!isPayrollDayApproved(week, dayDate)) continue;

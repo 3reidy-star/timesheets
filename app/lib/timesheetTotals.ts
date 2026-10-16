@@ -121,6 +121,7 @@ function computeEntryWeekdayOT(entry: TimesheetEntryForTotals) {
 export function calcWeekTotals(
   entries: TimesheetEntryForTotals[],
   _weekStartInput?: Date | string | null,
+  employee?: { name?: string | null },
 ) {
   const byDay = new Map<string, TimesheetEntryForTotals[]>();
 
@@ -304,7 +305,10 @@ export function calcWeekTotals(
   );
 
   const hasAnyLeftEarlyByChoice = days.some((day) => day.leftEarlyByChoice);
-  const businessTopUpHours = hasAnyLeftEarlyByChoice || days.length === 0 ? 0 : BUSINESS_TOP_UP_HOURS;
+  // Alex Smith's agreed pay excludes the weekly half-hour top-up.
+  const employeeName = employee?.name?.trim().replace(/\s+/g, " ").toLowerCase();
+  const receivesBusinessTopUp = employeeName !== "alex smith";
+  const businessTopUpHours = !receivesBusinessTopUp || hasAnyLeftEarlyByChoice || days.length === 0 ? 0 : BUSINESS_TOP_UP_HOURS;
 
   return {
     days,

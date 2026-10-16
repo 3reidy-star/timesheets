@@ -114,7 +114,7 @@ export async function POST(request: Request) {
     });
 
     const computed = updatedWeek
-      ? calcWeekTotals(updatedWeek.entries, updatedWeek.weekStart)
+      ? calcWeekTotals(updatedWeek.entries, updatedWeek.weekStart, updatedWeek.user)
       : null;
 
     return NextResponse.json({

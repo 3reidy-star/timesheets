@@ -261,7 +261,7 @@ export async function GET(req: Request) {
     }[] = [];
 
     for (const week of weeks) {
-      const computed = calcWeekTotals(week.entries, week.weekStart);
+      const computed = calcWeekTotals(week.entries, week.weekStart, employee);
 
       for (const entry of week.entries) {
         if (entry.date < fromDate || entry.date > toDate) continue;

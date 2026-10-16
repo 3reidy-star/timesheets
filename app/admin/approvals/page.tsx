@@ -102,7 +102,7 @@ export default async function AdminApprovalsPage({ searchParams }: {
   const formattedWeeks: ApprovalWeek[] = weeks
     .filter((week) => week.user?.active)
     .map((week) => {
-      const computed = calcWeekTotals(week.entries, week.weekStart);
+      const computed = calcWeekTotals(week.entries, week.weekStart, week.user);
 
       return {
         id: week.id,

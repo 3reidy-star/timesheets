@@ -167,6 +167,27 @@ async function summary(from,to) {
   await expectStatus(reviewWeek,{weekId:'w',action:'APPROVE'},200);
   assert.ok(week.dayApprovals.every(day => day.status === 'APPROVED'));
   assert.equal((await summary('2026-10-16','2026-11-15')).getCell(7).value,5.5,'Friday OT plus weekly top-up belongs to the next period');
+  // The employee exception must flow through screen totals and both payroll exports.
+  owner.name = 'Alex Smith'; week.user = owner;
+  const alexTotals = load('app/lib/timesheetTotals.ts').calcWeekTotals(week.entries, week.weekStart, owner);
+  assert.equal(alexTotals.totals.businessTopUpHours,0);
+  assert.equal(alexTotals.rules.businessTopUpHours,0);
+  assert.equal(load('app/lib/timesheetTotals.ts').calcWeekTotals(week.entries,week.weekStart,{name:'  ALEX   SMITH '}).totals.businessTopUpHours,0);
+  assert.equal((await summary('2026-10-16','2026-11-15')).getCell(7).value,5,'Alex payroll summary excludes weekly top-up');
+  const alexDetail = await load('app/api/week/detail/route.ts').GET(new Request('http://localhost/api?weekId=w'));
+  assert.equal((await alexDetail.json()).computed.totals.businessTopUpHours,0,'Alex detail screen excludes top-up');
+  const alexExport = await load('app/api/admin/payroll/export/route.ts').GET(new Request('http://localhost/api?from=2026-10-16&to=2026-11-15&userId=u'));
+  assert.equal(alexExport.status,200);
+  const alexWorkbook = new ExcelJS.Workbook(); await alexWorkbook.xlsx.load(Buffer.from(await alexExport.arrayBuffer()));
+  assert.equal(alexWorkbook.worksheets[0].getCell('J7').value,0,'Alex detailed payroll export excludes top-up');
+  actor = owner;
+  const alexOwnWeek = await load('app/api/week/route.ts').GET(new Request('http://localhost/api?weekStart=2026-10-12'));
+  assert.equal((await alexOwnWeek.json()).computed.totals.businessTopUpHours,0,'Alex own timesheet excludes top-up');
+  admin();
+  const alexApprovals = await approvalsPage();
+  assert.equal(alexApprovals.props.initialWeeks[0].computed.totals.businessTopUpHours,0,'Approvals excludes Alex top-up');
+  owner.name = 'Test Employee';
+  assert.equal((await summary('2026-10-16','2026-11-15')).getCell(7).value,5.5,'Other employees retain top-up');
   week.dayApprovals=[]; // compatibility with historical whole-week approvals
   await expectStatus(reviewDay,{weekId:'w',date:'2026-10-15',action:'REOPEN',comment:'Historical correction'},200);
   assert.equal(payroll.isPayrollDayApproved(enriched(),date('2026-10-16')),true);

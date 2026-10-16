@@ -55,7 +55,7 @@ export default async function AdminTimesheetsPage() {
   });
 
   const formattedWeeks: AdminTimesheetWeekSummary[] = weeks.map((week) => {
-    const computed = calcWeekTotals(week.entries);
+    const computed = calcWeekTotals(week.entries, week.weekStart, week.user);
 
     return {
       id: week.id,
