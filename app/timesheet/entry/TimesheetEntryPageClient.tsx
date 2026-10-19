@@ -60,9 +60,13 @@ function fmt2(n: number) {
 
 function isoDateFromWeekStart(weekStart: string) {
   if (!weekStart) return "";
-  const d = new Date(`${weekStart}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toISOString().slice(0, 10);
+  // This is a calendar date, not an instant. Converting UK midnight to UTC
+  // moves Monday back to Sunday while British Summer Time is in effect.
+  const dateIso = weekStart.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) return "";
+  const d = new Date(`${dateIso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== dateIso) return "";
+  return dateIso;
 }
 
 function dayNameLong(dateIso: string) {
