@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 import { auth } from "@/auth";
 import { prisma } from "@/app/lib/prisma";
 import { ensureDayApprovalSchema } from "@/app/lib/dayApprovalSchema";
-import { calcWeekTotals, usesActualHours } from "@/app/lib/timesheetTotals";
+import { calcWeekTotals } from "@/app/lib/timesheetTotals";
 import { isPayrollDayApproved } from "@/app/lib/payrollApproval";
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
@@ -67,9 +67,10 @@ export async function GET(req: Request) {
           regularHours += Number(day.regularHours || 0); weekdayOvertime += Number(day.otMonFriHours || 0); saturdayOvertime += Number(day.otSatHours || 0); sundayOvertime += Number(day.otSunBhHours || 0); overnightStays += Number(day.overnightCount || 0);
           for (const entry of day.entries) { if (entry.type === "HOLIDAY_FULL") holidayDays += 1; if (entry.type === "HOLIDAY_HALF") holidayDays += 0.5; }
         }
-        const topUpDate = fridayOfWeek(week.weekStart); if (week.status === "APPROVED" && topUpDate >= fromDate && topUpDate <= toDate) weekdayOvertime += Number(computed.totals.businessTopUpHours || 0);
+        const topUpDate = fridayOfWeek(week.weekStart); if (week.status === "APPROVED" && topUpDate >= fromDate && topUpDate <= toDate) regularHours += Number(computed.totals.businessTopUpHours || 0);
       }
-      const basicHours = metadata.basicHours || usesActualHours(user) ? round2(regularHours) : null;
+      // Basic hours include the weekly top-up, which is paid at the standard rate.
+      const basicHours = round2(regularHours);
       const row = sheet.addRow([metadata.payrollNumber ?? null, metadata.title || null, firstName || null, surname || null, null, basicHours && basicHours !== 0 ? basicHours : null, weekdayOvertime ? round2(weekdayOvertime) : null, saturdayOvertime ? round2(saturdayOvertime) : null, sundayOvertime ? round2(sundayOvertime) : null, overnightStays || null, holidayDays ? round2(holidayDays) : null, null]);
       row.getCell(1).numFmt = "0"; for (const column of [6, 7, 8, 9, 11]) row.getCell(column).numFmt = "0.##"; row.getCell(10).numFmt = "0";
     }
