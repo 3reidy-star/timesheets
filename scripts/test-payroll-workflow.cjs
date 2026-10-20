@@ -201,7 +201,10 @@ async function summary(from,to) {
   actor=owner; await expectStatus(submit,{weekId:'w'},200); admin();
   await expectStatus(reviewWeek,{weekId:'w',action:'APPROVE'},200);
   assert.ok(week.dayApprovals.every(day => day.status === 'APPROVED'));
-  assert.equal((await summary('2026-10-16','2026-11-15')).getCell(7).value,5.5,'Friday OT plus weekly top-up belongs to the next period');
+  const approvedSummary = await summary('2026-10-16','2026-11-15');
+  assert.equal(approvedSummary.getCell(7).value,5,'Weekly top-up must not increase overtime');
+  assert.equal(approvedSummary.getCell(6).value,5.5,'Friday basic hours include the weekly standard-rate top-up');
+  assert.equal((await summary('2026-09-16','2026-10-15')).getCell(6).value,32,'Top-up is not duplicated in the earlier payroll period');
   // The employee exception must flow through screen totals and both payroll exports.
   owner.name = 'Alex Smith'; week.user = owner;
   const alexTotals = load('app/lib/timesheetTotals.ts').calcWeekTotals(week.entries, week.weekStart, owner);
@@ -209,6 +212,7 @@ async function summary(from,to) {
   assert.equal(alexTotals.rules.businessTopUpHours,0);
   assert.equal(load('app/lib/timesheetTotals.ts').calcWeekTotals(week.entries,week.weekStart,{name:'  ALEX   SMITH '}).totals.businessTopUpHours,0);
   assert.equal((await summary('2026-10-16','2026-11-15')).getCell(7).value,5,'Alex payroll summary excludes weekly top-up');
+  assert.equal((await summary('2026-10-16','2026-11-15')).getCell(6).value,5,'Alex basic hours exclude weekly top-up');
   const alexDetail = await load('app/api/week/detail/route.ts').GET(new Request('http://localhost/api?weekId=w'));
   assert.equal((await alexDetail.json()).computed.totals.businessTopUpHours,0,'Alex detail screen excludes top-up');
   const alexExport = await load('app/api/admin/payroll/export/route.ts').GET(new Request('http://localhost/api?from=2026-10-16&to=2026-11-15&userId=u'));
@@ -222,7 +226,7 @@ async function summary(from,to) {
   const alexApprovals = await approvalsPage();
   assert.equal(alexApprovals.props.initialWeeks[0].computed.totals.businessTopUpHours,0,'Approvals excludes Alex top-up');
   owner.name = 'Test Employee';
-  assert.equal((await summary('2026-10-16','2026-11-15')).getCell(7).value,5.5,'Other employees retain top-up');
+  assert.equal((await summary('2026-10-16','2026-11-15')).getCell(6).value,5.5,'Other employees retain top-up as basic hours');
   // Becky receives entered hours, without standard-day or weekly top-ups.
   const beforeBecky = structuredClone(week);
   const savedOwner = {...owner};
